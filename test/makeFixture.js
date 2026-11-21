@@ -104,6 +104,14 @@ const INFO_PLIST = `<?xml version="1.0" encoding="UTF-8"?>
     <key>CFBundleURLSchemes</key><array><string>demoapp</string><string>example</string></array>
   </dict></array>
   <key>NSAppTransportSecurity</key><dict><key>NSAllowsArbitraryLoads</key><true/></dict>
+  <key>NSCameraUsageDescription</key><string>Scan receipts</string>
+  <key>LSApplicationQueriesSchemes</key><array><string>venmo</string></array>
+</dict></plist>`;
+
+const WIDGET_PLIST = `<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>
+  <key>CFBundleIdentifier</key><string>com.example.demo.widget</string>
+  <key>CFBundleExecutable</key><string>DemoWidget</string>
 </dict></plist>`;
 
 const MOBILEPROVISION = `signed-cms-wrapper-bytes-ignored
@@ -126,14 +134,25 @@ const MOBILEPROVISION = `signed-cms-wrapper-bytes-ignored
 </dict></plist>
 trailer-bytes-ignored`;
 
-export function writeAppDir(root) {
+export const FIXTURE_BIN = new URL("./fixtures/bin/", import.meta.url).pathname;
+
+/**
+ * Build Payload/Demo.app under root. opts.executable replaces the crafted
+ * main executable (e.g. with a real linked fixture binary).
+ */
+export function writeAppDir(root, opts = {}) {
   rmSync(root, { recursive: true, force: true });
   const app = join(root, "Payload", "Demo.app");
   mkdirSync(join(app, "Frameworks", "Flutter.framework"), { recursive: true });
-  writeFileSync(join(app, "Demo"), buildMachO());
+  mkdirSync(join(app, "Frameworks", "FirebaseCore.framework"), { recursive: true });
+  mkdirSync(join(app, "PlugIns", "DemoWidget.appex"), { recursive: true });
+  writeFileSync(join(app, "Demo"), opts.executable ?? buildMachO());
   writeFileSync(join(app, "Info.plist"), INFO_PLIST);
   writeFileSync(join(app, "embedded.mobileprovision"), MOBILEPROVISION);
   writeFileSync(join(app, "Frameworks", "Flutter.framework", "Flutter"), buildMachO());
+  writeFileSync(join(app, "Frameworks", "FirebaseCore.framework", "FirebaseCore"), buildMachO());
+  writeFileSync(join(app, "PlugIns", "DemoWidget.appex", "Info.plist"), WIDGET_PLIST);
+  writeFileSync(join(app, "PlugIns", "DemoWidget.appex", "DemoWidget"), buildMachO());
   return app;
 }
 

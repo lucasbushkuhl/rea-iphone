@@ -9,7 +9,7 @@ export function renderText(r) {
   L.push("");
 
   for (const app of r.apps) {
-    L.push(`App: ${app.root}`);
+    L.push(`App: ${app.root ?? "(bare Mach-O)"}`);
     const b = app.bundle || {};
     L.push(`  Bundle ID:     ${b.identifier ?? "(unknown)"}`);
     L.push(`  Name:          ${b.displayName ?? b.name ?? "(unknown)"}`);
@@ -25,7 +25,8 @@ export function renderText(r) {
       L.push(`    Mach-O: ${e.kind}, slices: ${e.slices.map((s) => s.arch).join(", ")}`);
       for (const s of e.slices) {
         L.push(`    • ${s.arch} ${s.filetype} — platform ${s.platform ?? "?"} min ${s.minimum_os ?? "?"} sdk ${s.sdk ?? "?"}`);
-        L.push(`        FairPlay encrypted: ${fmtBool(s.fairplay_encrypted)} (cryptid ${s.crypt_id})   signed: ${fmtBool(s.code_signature)}`);
+        const fp = s.crypt_id == null ? "n/a (no LC_ENCRYPTION_INFO)" : `${fmtBool(s.fairplay_encrypted)} (cryptid ${s.crypt_id})`;
+        L.push(`        FairPlay encrypted: ${fp}   signed: ${fmtBool(s.code_signature)}${s.fixup_format ? `   fixups: ${s.fixup_format}` : ""}`);
         if (s.languages.length) L.push(`        Languages: ${s.languages.join(", ")}`);
         if (s.uuid) L.push(`        UUID: ${s.uuid}`);
         if (s.linked_dylibs.length) {
@@ -57,6 +58,41 @@ export function renderText(r) {
       L.push(`  Embedded frameworks (${app.embedded_frameworks.length}):`);
       for (const f of app.embedded_frameworks.slice(0, 30)) L.push(`    - ${f}`);
     }
+    if (app.app_extensions?.length) L.push(`  App extensions: ${app.app_extensions.join(", ")}`);
+    if (b.privacyUsageDescriptions) {
+      L.push(`  Privacy usage descriptions:`);
+      for (const [k, v] of Object.entries(b.privacyUsageDescriptions)) L.push(`    - ${k}: ${v}`);
+    }
+    if (b.queriedSchemes) L.push(`  Queried URL schemes: ${b.queriedSchemes.join(", ")}`);
+    if (b.atsExceptionDomains) L.push(`  ATS exception domains: ${b.atsExceptionDomains.join(", ")}`);
+
+    if (app.deep) {
+      const d = app.deep;
+      L.push(`  Deep static analysis (${d.arch}, ${d.fixups.mode} fixups${d.fixups.formats.length ? `: ${d.fixups.formats.join(", ")}` : ""}):`);
+      L.push(`    Objective-C: ${d.objc.classes} classes, ${d.objc.categories} categories, ${d.objc.protocols} protocols, ${d.objc.methods} methods`);
+      if (d.objc.class_names.length) L.push(`      classes: ${d.objc.class_names.join(", ")}`);
+      if (d.objc.external_classes.length) L.push(`      uses external classes: ${d.objc.external_classes.join(", ")}`);
+      L.push(`    Swift: ${d.swift.types} types, ${d.swift.protocols} protocols, ${d.swift.conformances} conformances; symbols demangled ${d.swift.demangled_symbols}`);
+      if (d.swift.type_names.length) L.push(`      types: ${d.swift.type_names.join(", ")}`);
+      L.push(`    Symbols: ${d.symbols.total} (${d.symbols.stripped ? "stripped" : "not stripped"}), ${d.symbols.exports} exports`);
+      for (const g of d.symbols.imports_by_library) L.push(`      imports from ${g.library}: ${g.count}`);
+      const cats = Object.entries(d.strings.findings);
+      if (cats.length) {
+        L.push(`    String findings:`);
+        for (const [cat, vals] of cats) L.push(`      ${cat}: ${vals.join(" | ")}`);
+      }
+    }
+    L.push("");
+  }
+
+  if (r.binaries?.length > 1) {
+    L.push(`Binaries (${r.binaries.length}):`);
+    for (const bin of r.binaries) L.push(`  - [${bin.role}] ${bin.path}`);
+    L.push("");
+  }
+  if (r.third_party_sdks?.length) {
+    L.push(`Third-party SDKs (static hints):`);
+    for (const s of r.third_party_sdks) L.push(`  - ${s.sdk} (${s.category})  [${s.basis.join("; ")}]`);
     L.push("");
   }
 

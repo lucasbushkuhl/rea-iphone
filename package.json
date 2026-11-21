@@ -1,21 +1,58 @@
 {
   "name": "rea-iphone",
-  "version": "0.1.0",
-  "description": "Reverse Engineer Anything — iPhone edition. Static, execution-free, evidence-based analysis of iOS apps (IPA / .app): Mach-O, Info.plist, entitlements, provisioning profiles, FairPlay state, runtime-family detection. Zero dependencies.",
+  "version": "0.2.0",
+  "description": "Reverse Engineer Anything — iPhone edition. Static, execution-free iOS app analysis (Mach-O, chained fixups, Objective-C class-dump, Swift metadata + demangling, symbols, classified strings, entitlements, provisioning), a libimobiledevice device layer, a Frida observation bridge, and an MCP server. Zero dependencies.",
   "type": "module",
   "bin": {
     "rea-iphone": "bin/rea-iphone.js"
   },
   "exports": {
-    ".": "./src/analyze.js"
+    ".": "./src/analyze.js",
+    "./macho": "./src/macho.js",
+    "./fixups": "./src/macho/fixups.js",
+    "./symbols": "./src/macho/symbols.js",
+    "./objc": "./src/objc.js",
+    "./swift": "./src/swift/metadata.js",
+    "./demangle": "./src/swift/demangle.js",
+    "./strings": "./src/strings.js",
+    "./deep": "./src/deep.js",
+    "./target": "./src/target.js",
+    "./device": "./src/device/idevice.js",
+    "./frida": "./src/frida/scripts.js",
+    "./frida/runner": "./src/frida/runner.js",
+    "./mcp": "./src/mcp/server.js"
   },
+  "files": [
+    "bin/",
+    "src/",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
-    "test": "node --test",
-    "analyze": "node bin/rea-iphone.js analyze"
+    "test": "node --test 'test/*.test.js'",
+    "analyze": "node bin/rea-iphone.js analyze",
+    "mcp": "node bin/rea-iphone.js mcp",
+    "build:fixtures": "test/fixtures/build.sh"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
   "license": "MIT",
-  "keywords": ["ios", "iphone", "reverse-engineering", "mach-o", "ipa", "static-analysis", "security-research"]
+  "keywords": [
+    "ios",
+    "iphone",
+    "reverse-engineering",
+    "mach-o",
+    "chained-fixups",
+    "class-dump",
+    "objective-c",
+    "swift",
+    "demangler",
+    "ipa",
+    "frida",
+    "libimobiledevice",
+    "mcp",
+    "static-analysis",
+    "security-research"
+  ]
 }

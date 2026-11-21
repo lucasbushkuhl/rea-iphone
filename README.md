@@ -1,107 +1,314 @@
 # REA-iPhone — Reverse Engineer Anything, iPhone edition
 
-Static, **execution-free**, evidence-based analysis of iOS applications
-(`.ipa` archives and unpacked `.app` bundles). Built in the spirit of
-[REA](https://github.com/morluto/rea): every reported fact is an *evidence
-record* that states how it was derived and the limitation behind the
-conclusion. Nothing from the target is ever executed.
+**See a feature in an iPhone app. Understand how it works, down to the binary.**
 
-REA ships a first-class **Android** provider (APK → JADX decompile, apktool
-resources, adb device access, signature inspection) but no first-class
-**iPhone/iOS** provider. This is that missing analog — the Apple-platform
-counterpart — as a standalone, zero-dependency Node tool you own.
+REA-iPhone is the iOS counterpart to [REA](https://github.com/morluto/rea)'s
+Android provider: one toolkit, usable from the terminal or by an AI agent over
+MCP, that takes an iOS app apart and returns **evidence** — every fact says how
+it was derived and what its limits are.
 
+| Layer | What you get |
+| --- | --- |
+| **Static analysis** (execution-free) | Bundle identity, Info.plist, Mach-O slices, FairPlay state, entitlements, provisioning, frameworks, app extensions, runtime families, third-party SDKs |
+| **Objective-C class-dump** | Classes, metaclasses, categories, protocols, ivars, properties, method type signatures and IMP addresses, rendered as a class-dump header |
+| **Swift metadata** | Structs/classes/enums with stored properties or cases and their types, superclasses, protocols, conformances, rendered as Swift declarations |
+| **Swift demangler** | `$s…` symbols to readable signatures (`WalletKit.TransferService.fetch(url: Swift.String, timeout: Swift.Double) async throws -> Swift.String?`) |
+| **Symbols & fixups** | Imports grouped by library, exports, every dyld bind site; classic *and* chained fixups |
+| **Strings** | C strings, NSString literals, selectors, Swift reflection strings, classified into endpoints, embedded credentials, jailbreak-detection and TLS-pinning indicators |
+| **Device layer** | The `adb` analog over libimobiledevice: devices, device info, installed apps, bounded syslog capture, crash-report pull + summaries |
+| **Frida bridge** | Runtime observation: ObjC method tracing with type-aware argument decoding, native export tracing, HTTP/DNS observation, runtime class listing |
+| **MCP server** | All of the above as 14 typed tools for Claude Code, Codex, Cursor, Claude Desktop |
+
+Zero dependencies. Node 20+. MIT.
+
+```bash
+git clone https://github.com/lucasbushkuhl/rea-iphone && cd rea-iphone
+node bin/rea-iphone.js analyze examples/Demo.ipa --deep
 ```
-npx rea-iphone analyze /path/to/App.ipa
-node bin/rea-iphone.js analyze /path/to/Payload/MyApp.app --json
+
+---
+
+## Quick start
+
+```bash
+# Everything at once
+rea-iphone analyze MyApp.ipa --deep
+
+# Objective-C headers, like class-dump
+rea-iphone classdump MyApp.ipa > MyApp.h
+rea-iphone classdump MyApp.ipa --filter 'Payment|Wallet'
+
+# Swift types, recovered from reflection metadata
+rea-iphone swift MyApp.ipa
+
+# Endpoints, embedded keys, integrity checks, pinning
+rea-iphone strings MyApp.ipa
+rea-iphone strings MyApp.ipa --all --filter 'api\.'
+
+# What does it call, and from where?
+rea-iphone symbols MyApp.ipa                 # imports grouped by library
+rea-iphone symbols MyApp.ipa --exports
+rea-iphone fixups  MyApp.ipa --binds
+
+# Any binary inside the app, any slice of a fat binary
+rea-iphone classdump MyApp.ipa --binary Flutter.framework/Flutter
+rea-iphone swift     MyApp.ipa --binary PlugIns/Widget.appex/Widget --arch arm64
+
+rea-iphone demangle '$s9WalletKit7AccountV7balanceSdvg'
+#  -> WalletKit.Account.balance.getter : Swift.Double
 ```
 
-## What it extracts
+`TARGET` is an `.ipa`, an unpacked `.app` directory, or a bare Mach-O file.
+Add `--json` to any command for structured output.
 
-| Area | Facts | Source |
-| --- | --- | --- |
-| **Bundle identity** | bundle id, name, display name, short/build version, minimum iOS, supported platforms, required capabilities, custom URL schemes, App Transport Security `NSAllowsArbitraryLoads` | `Info.plist` (binary `bplist00` **and** XML) |
-| **Mach-O (per arch slice)** | architecture (arm64/arm64e/…), 32/64-bit, file type, linked **platform + min OS + SDK**, UUID, **FairPlay encryption state** (`LC_ENCRYPTION_INFO` cryptid), code-signature presence, linked dylibs, `@rpath`s, **Swift / Objective-C** language hints | fat + thin Mach-O header & load-command parse |
-| **Entitlements** | application-identifier, team-identifier, `get-task-allow`, aps-environment, app groups, keychain groups, associated domains, all keys | embedded entitlements plist in the code-signature blob |
-| **Provisioning** | profile name, team, team identifiers, **distribution type** (development / ad-hoc / enterprise / app-store), `get-task-allow`, expiry (+ expired flag), provisioned device count | `embedded.mobileprovision` (embedded XML plist from the CMS container) |
-| **Composition** | embedded frameworks inventory, **runtime-family hints**: Flutter, React Native (+ Hermes), Unity, Capacitor/Cordova, .NET/Xamarin/MAUI, Kotlin Native | container path conventions |
+### What the class-dump looks like
 
-Output is a human-readable report by default, or a full evidence-linked JSON
-document with `--json`.
+From a real linked arm64 binary (`test/fixtures/bin/WalletKit-chained`):
 
-## Why the facts matter (reverse-engineering workflow)
+```objc
+@interface Wallet : NSObject <Greeter>
+{
+    long long _balance; // +0
+    NSString *_owner; // +8
+    unsigned char _flags[4]; // +16
+    struct GeoPoint _location; // +24
+}
 
-1. **FairPlay / cryptid** — the single most important gate. `cryptid != 0`
-   means `__TEXT` is encrypted by the App Store; static strings and
-   decompilation are meaningless until you have a decrypted copy dumped from a
-   device *you own and are authorized to analyze*. `cryptid == 0` means it's a
-   dev build or already decrypted and ready to read.
-2. **Language hints** — Swift vs. Objective-C decides your tooling (Swift
-   metadata demanglers vs. ObjC runtime class-dump).
-3. **Runtime family** — a Flutter/React Native/Unity app means the real logic
-   lives in a Dart snapshot / JS bundle / IL2CPP blob, not the Mach-O; it points
-   you at the right secondary target.
-4. **Entitlements + URL schemes + ATS** — the app's attack/interop surface:
-   what it can talk to, what deep links it exposes, whether it allows cleartext.
-5. **Provisioning** — tells you instantly whether a build is debuggable
-   (`get-task-allow`), who signed it, and whether it's still valid.
+@property (class, nonatomic, readonly) int instanceCount;
+@property (nonatomic, copy) NSString *owner; // @synthesize owner=_owner
+
++ (id)sharedWallet; // IMP 0x100004018
+- (void)deposit:(long long)arg1; // IMP 0x100004048
+- (_Bool)transferTo:(id)arg1 amount:(double)arg2 error:(id *)arg3; // IMP 0x100004074
+@end
+
+@interface NSObject (Telemetry)
+- (void)rea_trackEvent:(id)arg1; // IMP 0x100004188
+@end
+```
+
+### …and the Swift metadata
+
+```swift
+struct WalletKit.Account {
+  let id: Swift.Int
+  let owner: Swift.String
+  var balance: Swift.Double
+  var nickname: Swift.String?
+}
+
+class WalletKit.PremiumService : WalletKit.TransferService {
+  let tier: Swift.Int
+  var backup: WalletKit.Account?
+}
+
+enum WalletKit.TransferState {
+  case failed(Swift.String)
+  case pending
+  case completed
+}
+
+extension WalletKit.TransferService : Swift.Hashable {}
+extension Wallet : WalletKit.Transferable {} // Objective-C class
+```
+
+---
+
+## Use it from an agent (MCP)
+
+```bash
+rea-iphone setup        # prints the exact commands for your machine
+claude mcp add rea-iphone -- node /path/to/rea-iphone/bin/rea-iphone.js mcp
+```
+
+Then ask your agent things like:
+
+> Analyze ~/Downloads/MyApp.ipa deeply. How does it talk to its backend? Show me
+> the classes involved and the evidence, then sketch how I'd build the same
+> feature in my app.
+
+| Tool | Purpose |
+| --- | --- |
+| `analyze_ios_application` | Full report; `deep: true` adds every static layer |
+| `dump_objc_classes` | class-dump header or JSON, regex filter |
+| `dump_swift_types` | Swift declarations or JSON |
+| `extract_strings` | Classified findings, optional raw strings with filter/limit |
+| `list_symbols` | Imports / exports / defined symbols, demangled |
+| `inspect_fixups` | Fixup format, imports, bind sites |
+| `demangle_swift` | Batch demangling |
+| `list_ios_devices`, `ios_device_info`, `list_installed_apps` | Device inventory |
+| `capture_device_syslog`, `pull_crash_reports` | Device diagnostics |
+| `generate_frida_script`, `run_frida_session` | Runtime observation |
+
+The server speaks MCP 2024-11-05 through 2025-06-18 over stdio, validates every
+argument against the tool's JSON Schema, bounds output size, and reports tool
+failures as `isError` results.
+
+---
+
+## Device layer
+
+Requires [libimobiledevice](https://libimobiledevice.org/) and
+`ideviceinstaller` (`brew install libimobiledevice ideviceinstaller`). It only
+talks to devices that are **paired** with your computer, which iOS makes the
+device owner approve on screen ("Trust This Computer?").
+
+```bash
+rea-iphone device list
+rea-iphone device info
+rea-iphone device apps --type user
+rea-iphone device syslog --process MyApp --seconds 30
+rea-iphone device crashes --out ./crashes --filter MyApp
+```
+
+Each result records the exact command it ran. Syslog capture is bounded
+(1–300 s, line caps); crash reports are copied (kept on the device) and
+summarized: exception, termination reason, top frames of the faulting thread.
+Tools are found on `PATH` or in `REA_IPHONE_TOOLS_DIR`. Both the classic and
+the newer `ideviceinstaller` command syntaxes are supported.
+
+## Frida bridge
+
+Requires `frida-tools` on your computer (`pip install frida-tools`) and
+`frida-server` (or a Frida gadget in your own build) on a device you control.
+
+```bash
+# What does tapping "Pay" actually call?
+rea-iphone frida run objc-trace --bundle com.example.myapp \
+    --pattern '-[PaymentController *]' --pattern '+[APIClient *]' --seconds 30
+
+# Which endpoints does the app hit?  (credential headers redacted by default)
+rea-iphone frida run network --bundle com.example.myapp --seconds 60
+
+# Classes as they exist at runtime (works even if the file on disk is encrypted)
+rea-iphone frida run classes --bundle com.example.myapp --attach
+
+# Or just get the script
+rea-iphone frida script objc-trace --pattern '-[NSURLSession *]' --out trace.js
+```
+
+Modes: `objc-trace`, `native-trace`, `network`, `classes`, `modules`.
+
+The scripts only **observe**. They don't patch behavior or bypass protections.
+`objc-trace` reads each hooked method's real type encoding from the ObjC
+runtime, so it decodes objects, selectors, C strings, BOOLs and exact signed
+64-bit integers instead of guessing which arguments are objects (guessing is
+what crashes target processes). Event counts are capped per hook and globally.
+The scripts run on both Frida 16 and Frida 17.
+
+---
+
+## The things that make or break iOS reverse engineering
+
+**FairPlay.** App Store binaries are encrypted (`LC_ENCRYPTION_INFO`
+`cryptid = 1`). REA-iPhone detects this and says so. In an encrypted binary,
+strings, selectors and Swift metadata in `__TEXT` can't be read, and the tool
+reports that rather than returning noise. Class *structures* in `__DATA` are
+still recovered. For full static analysis, use a build you produced yourself,
+or a decrypted copy obtained from a device you own. The Frida `classes` mode
+sees the decrypted app at runtime.
+
+**Chained fixups.** Since iOS 15, almost every App Store binary stores pointers
+as `LC_DYLD_CHAINED_FIXUPS` encodings rather than plain addresses. A class-dump
+that reads them naively gets garbage; even `llvm-objdump --objc-meta-data`
+prints the raw encoded values. REA-iPhone decodes every userland pointer format
+(`DYLD_CHAINED_PTR_64`, `64_OFFSET`, `ARM64E`, `ARM64E_USERLAND`,
+`ARM64E_USERLAND24`, including pointer-auth variants). It also handles classic
+rebase/bind opcodes, so external superclasses and category targets resolve to
+names like `NSObject`.
+
+**Relative method lists.** Modern toolchains emit 12-byte relative method
+lists. Both relative and pointer-based lists are supported.
+
+---
+
+## How it's verified
+
+The test suite (`npm test`: 56 tests, about 2 s, no tools or devices needed)
+runs against **real linked arm64 Mach-O binaries**, not mocks:
+
+- `test/fixtures/src/` holds an Objective-C source file and two hand-laid
+  assembly fixtures:
+  - one with genuine Swift 5 metadata structures, whose relative pointers are
+    resolved by the linker;
+  - one with an iOS 14+ relative method-list class.
+- `test/fixtures/build.sh` compiles and links them with clang and lld into
+  three binaries: classic fixups, chained fixups, and a fat binary (device +
+  simulator). The outputs are committed.
+- The class-dump is checked against `llvm-objdump --objc-meta-data` ground
+  truth, and the output is **byte-identical** across the classic, chained and
+  fat binaries.
+- The Swift demangler is checked against canonical manglings, including word
+  substitutions, substitutions, labels, `async throws`, accessors and
+  initializers.
+- The Frida agents are **executed** against a mock Frida runtime: hooks are
+  installed, arguments decoded, headers redacted, and caps enforced. The runner
+  is driven through a real subprocess.
+- The device layer runs against shim executables that reproduce
+  libimobiledevice's real output formats, including the bounded syslog stream
+  and the `ideviceinstaller` syntax fallback.
+- The MCP server is tested at the protocol level and through a live stdio
+  session.
+- **Robustness:** mutation fuzzing of both fixup formats, plus truncation tests
+  and hostile Swift symbols. Malformed input yields limitations, never crashes,
+  hangs, or unbounded work. In development fuzzing, 3,000 mutants produced zero
+  crashes and none took longer than 200 ms.
+
+## Honest limitations
+
+- The Swift demangler covers the commonly emitted subset. Generic signatures,
+  opaque types, closures and specializations return `null` (raw name kept)
+  rather than a guess.
+- The Objective-C class-dump supports 64-bit images, which covers every iOS 11+
+  app.
+- Entitlements and provisioning profiles are read from their embedded plists.
+  CMS and code-signature chains are not cryptographically validated.
+- Third-party SDK and runtime-family detection are static hints (framework
+  paths, class prefixes). They don't prove an SDK is initialized or collecting
+  data.
+- The device and Frida layers are tested against faithful shims and mocks.
+  Running them for real needs your device, the tools listed above, and (for
+  Frida) `frida-server` or a gadget.
 
 ## Architecture
 
-Mirrors REA's hexagonal shape — small, pure modules behind a uniform source
-abstraction, so an `.ipa` zip and an unpacked `.app` directory are analyzed by
-identical code:
-
-```
+```text
 src/
-  zip.js           minimal zero-dep ZIP reader (STORE + DEFLATE, Zip64 fallback)
-  plist.js         binary (bplist00) + XML property-list parser
-  macho.js         fat/thin Mach-O header + load-command parser
-  provisioning.js  embedded.mobileprovision + entitlements extraction
-  evidence.js      evidence records, SHA-256, runtime-family detection
-  analyze.js       orchestrator (source -> app roots -> evidence report)
-  report.js        human-readable renderer
-bin/rea-iphone.js  CLI
-test/              crafted arm64 Mach-O fixture + full end-to-end tests
+  target.js          .ipa / .app / Mach-O loading; main, framework, extension binaries
+  zip.js             zero-dep ZIP reader (STORE, DEFLATE, Zip64)
+  plist.js           binary (bplist00) and XML property lists
+  macho.js           Mach-O image model: segments, sections, vm<->file, encryption
+  macho/fixups.js    classic bind opcodes + chained fixups -> pointer resolver
+  macho/symbols.js   nlist symbol table, export trie, imports by library
+  objc.js            Objective-C class-dump + type-encoding decoder + header renderer
+  swift/demangle.js  Swift 5 demangler (stack-based, like swift's Demangler.cpp)
+  swift/metadata.js  Swift 5 reflection metadata reader + interface renderer
+  strings.js         string extraction + security/privacy classification
+  provisioning.js    embedded.mobileprovision + entitlements
+  evidence.js        evidence records, runtime families, third-party SDKs
+  deep.js            all static layers over one image, shared fixup resolver
+  analyze.js         report orchestrator
+  ips.js             Apple crash reports (.ips JSON and legacy .crash)
+  device/idevice.js  libimobiledevice adapter
+  frida/scripts.js   observational Frida agents
+  frida/runner.js    frida CLI driver + event parser
+  mcp/server.js      MCP stdio server (JSON-RPC 2.0)
+  util/exec.js       safe process execution (argv only, process groups, timeouts)
 ```
 
-Run the suite:
-
-```
-npm test          # node --test
-```
-
-The test fixture hand-crafts a structurally valid arm64 iOS Mach-O (FairPlay
-cryptid=1, a `__swift5_types` section, `LC_LOAD_DYLIB`, `LC_BUILD_VERSION`,
-UUID, code signature), builds a `Payload/Demo.app` and a deflated `Demo.ipa`,
-and asserts the full report — so parsing is verified against real byte layouts,
-not mocks.
-
-## Roadmap (parity with REA's Android depth)
-
-Static core is done. The natural next layers, each with the same
-evidence/limitation discipline:
-
-- **Objective-C class-dump** — walk `__objc_classlist` / `__objc_const` to
-  recover class, method and protocol names (works on decrypted binaries).
-- **Swift metadata** — parse `__swift5_types`/`__swift5_proto` and demangle.
-- **Symbol & string projection** — nlist symbol table, `__cstring` extraction.
-- **Device layer (the `adb` analog)** — a `libimobiledevice`/`ideviceinstaller`
-  adapter: list installed apps, pull containers, read `syslog`, over USB, from
-  devices you own.
-- **Dynamic layer** — a Frida bridge for runtime tracing (REA already has a
-  Frida instrumentation manager to model this on).
-- **MCP server** — expose `analyze_ios_application` as an MCP tool so an agent
-  can call it the way REA exposes its tools.
+Every external tool is run with an argv array, never a shell. Each tool gets
+its own process group with a hard timeout, so nothing it spawns outlives the
+command.
 
 ## Responsible use
 
-For lawful analysis only: security research, interoperability, app-store/privacy
-auditing, and analysis of software **you own or are explicitly authorized to
-examine**. Do not use it to circumvent DRM/FairPlay, defeat access controls, or
-analyze apps you have no right to. Obtaining decrypted binaries or device
-containers requires a device and an account you control. You are responsible for
-compliance with applicable law, license terms, and Apple's agreements.
+For lawful work only: security research, interoperability, privacy and
+supply-chain auditing, debugging, and education, on software and devices you
+**own or are explicitly authorized to examine**. Don't use it to circumvent
+DRM or FairPlay, defeat access controls, or tamper with other people's apps,
+accounts or services. Getting decrypted binaries, device containers or runtime
+access requires a device and accounts you control. You are responsible for
+complying with applicable law, license agreements and Apple's terms.
 
 ## License
 
