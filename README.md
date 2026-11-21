@@ -21,6 +21,33 @@ it was derived and what its limits are.
 
 Zero dependencies. Node 20+. MIT.
 
+## Signal Sweep: find trackers and hidden cameras (web app)
+
+`scanner/` is **Signal Sweep**, a counter-surveillance web app for your
+phone. Add it to your home screen; there's no App Store involved. It runs
+entirely on the device.
+
+| Tool | What it does | Where it works |
+| --- | --- | --- |
+| Bluetooth trackers | Live scan that identifies AirTags and Find My trackers away from their owner, Tile, Samsung SmartTag, Google Find My Device tags and Chipolo, ranked by concern. Devices that stay near you are flagged. A hot/cold finder with a rising tone walks you to one. | iPhone: in the free **Bluefy** browser (Safari has no Bluetooth). Android, Mac, PC: Chrome with *Experimental Web Platform features* on. |
+| Lens finder | Marks the small, steady, sharp reflections a hidden camera lens throws back; red-filter view and flashlight toggle. | Any phone browser |
+| Infrared finder | Marks the infrared LEDs of night-vision cameras, with a TV-remote test so you know whether your camera can see infrared. | Any phone browser |
+| Wi-Fi names | Flags network names that budget spy cameras broadcast (IPC-, V380, Yoosee, HD-CAM…). You read the names from Settings › Wi-Fi. | Anywhere |
+| Sweep checklist | Room, car, and bag checklists, saved on the phone. | Anywhere |
+
+What no phone can do, which the app says plainly: list Wi-Fi networks on
+iPhone (Apple blocks it for every app), and detect raw radio frequencies
+(phones have no receiver apps can read; use a handheld RF detector).
+
+Tracker identification follows public research and Bluetooth SIG assigned
+numbers (Heinrich et al., PETS 2021; the AirGuard project). It's covered by
+unit tests on real advertisement bytes. An end-to-end test drives the app in
+Chromium with a simulated Bluetooth radio, and feeds the lens finder a camera
+video containing a lens glint.
+
+After GitHub Pages is enabled (below), Signal Sweep is at
+`https://<user>.github.io/rea-iphone/scanner/`.
+
 ## Use it on your iPhone (web app, no App Store)
 
 The static analysis also runs as a **web app you add to your home screen**.
@@ -266,7 +293,7 @@ lists. Both relative and pointer-based lists are supported.
 
 ## How it's verified
 
-The test suite (`npm test`: 62 tests, a few seconds, no tools or devices needed)
+The test suite (`npm test`: 73 tests, a few seconds, no tools or devices needed)
 runs against **real linked arm64 Mach-O binaries**, not mocks:
 
 - `test/fixtures/src/` holds an Objective-C source file and two hand-laid

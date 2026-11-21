@@ -78,7 +78,45 @@ function render(size, k) {
   return png(size, size, rgb);
 }
 
-for (const [name, size, k] of [["icon-180.png", 180, 1], ["icon-192.png", 192, 1], ["icon-512.png", 512, 1], ["icon-maskable-512.png", 512, 0.78]]) {
-  writeFileSync(join(OUT, name), render(size, k));
-}
+const SIZES = [["icon-180.png", 180, 1], ["icon-192.png", 192, 1], ["icon-512.png", 512, 1], ["icon-maskable-512.png", 512, 0.78]];
+for (const [name, size, k] of SIZES) writeFileSync(join(OUT, name), render(size, k));
 console.log(`icons written to ${OUT}`);
+
+// ---- Signal Sweep: radar rings and a sweep wedge with a detected blip.
+const SWEEP_OUT = join(dirname(fileURLToPath(import.meta.url)), "..", "scanner", "icons");
+mkdirSync(SWEEP_OUT, { recursive: true });
+const SW_BG = [0x0b, 0x14, 0x12];
+const SW_RING = [0x2c, 0x6b, 0x55];
+const SW_SWEEP = [0x3f, 0xd4, 0x9b];
+const SW_BLIP = [0xff, 0x6b, 0x5a];
+function sweepShade(u, v, k) {
+  const x = (u - 0.5) / k;
+  const y = (v - 0.5) / k;
+  const d = Math.hypot(x, y);
+  const blip = Math.hypot(x - 0.17, y + 0.16);
+  if (blip < 0.052) return SW_BLIP;
+  for (const r of [0.13, 0.25, 0.37]) if (Math.abs(d - r) < 0.014) return SW_RING;
+  const ang = Math.atan2(y, x); // sweep wedge from -100deg to -40deg
+  if (d < 0.37 && ang > -1.75 && ang < -0.7) {
+    const t = (ang + 1.75) / 1.05;
+    return SW_BG.map((c, i) => Math.round(c + (SW_SWEEP[i] - c) * (0.15 + 0.6 * t)));
+  }
+  if (d < 0.025) return SW_SWEEP;
+  return null;
+}
+function renderSweep(size, k) {
+  const rgb = Buffer.alloc(size * size * 3);
+  const S = 4;
+  for (let py = 0; py < size; py++) for (let px = 0; px < size; px++) {
+    let r = 0, g = 0, b = 0;
+    for (let sy = 0; sy < S; sy++) for (let sx = 0; sx < S; sx++) {
+      const c = sweepShade((px + (sx + 0.5) / S) / size, (py + (sy + 0.5) / S) / size, k) ?? SW_BG;
+      r += c[0]; g += c[1]; b += c[2];
+    }
+    const o = (py * size + px) * 3;
+    rgb[o] = Math.round(r / 16); rgb[o + 1] = Math.round(g / 16); rgb[o + 2] = Math.round(b / 16);
+  }
+  return png(size, size, rgb);
+}
+for (const [name, size, k] of SIZES) writeFileSync(join(SWEEP_OUT, name), renderSweep(size, k * 1.15));
+console.log(`icons written to ${SWEEP_OUT}`);
