@@ -1,94 +1,114 @@
-// Minimal ZIP reader, enough to inventory and extract members of an IPA
-// (which is a ZIP). Reads the central directory, supports STORE and DEFLATE,
-// and handles the common Zip64 case (0xffffffff local-header offset carried in
-// the extra field). No shelling out, no dependencies.
-
-import { inflateRawSync } from "node:zlib";
+// Minimal ZIP reader, enough to inventory and extract members of an IPA.
+// Pure: no Node imports. Decompression is injected (Node passes
+// zlib.inflateRawSync; the browser inflates asynchronously with
+// DecompressionStream and only needs the parsers exported here).
 
 const EOCD_SIG = 0x06054b50;
 const EOCD64_LOC_SIG = 0x07064b50;
 const EOCD64_SIG = 0x06064b50;
 const CEN_SIG = 0x02014b50;
-const LOC_SIG = 0x04034b50;
+export const LOC_SIG = 0x04034b50;
 
-export function readZip(buf) {
-  const eocd = findEOCD(buf);
-  let { entryCount, cdOffset } = eocd;
-
-  // Zip64 upgrade if the classic record is saturated.
-  if (entryCount === 0xffff || cdOffset === 0xffffffff) {
-    const loc = eocd.pos - 20;
-    if (loc >= 0 && buf.readUInt32LE(loc) === EOCD64_LOC_SIG) {
-      const eocd64Off = Number(buf.readBigUInt64LE(loc + 8));
-      if (buf.readUInt32LE(eocd64Off) === EOCD64_SIG) {
-        entryCount = Number(buf.readBigUInt64LE(eocd64Off + 32));
-        cdOffset = Number(buf.readBigUInt64LE(eocd64Off + 48));
-      }
+/**
+ * Locate the end-of-central-directory record in `tail`, the last bytes of the
+ * archive starting at absolute offset `tailOffset`. Returns the classic record
+ * plus, when present, the absolute offset of the Zip64 end record.
+ */
+export function findEOCD(tail, tailOffset = 0) {
+  const minPos = Math.max(0, tail.length - 65557); // max comment 65535 + 22
+  for (let pos = tail.length - 22; pos >= minPos; pos--) {
+    if (tail.readUInt32LE(pos) === EOCD_SIG) {
+      const rec = {
+        pos: tailOffset + pos,
+        entryCount: tail.readUInt16LE(pos + 10),
+        cdSize: tail.readUInt32LE(pos + 12),
+        cdOffset: tail.readUInt32LE(pos + 16),
+        zip64EndOffset: null,
+      };
+      const loc = pos - 20;
+      if (loc >= 0 && tail.readUInt32LE(loc) === EOCD64_LOC_SIG) rec.zip64EndOffset = Number(tail.readBigUInt64LE(loc + 8));
+      return rec;
     }
   }
+  throw new Error("not a ZIP/IPA: end-of-central-directory not found");
+}
 
+/** Apply a Zip64 end-of-central-directory record (56+ bytes) to an EOCD. */
+export function applyZip64End(eocd, rec64) {
+  if (rec64.readUInt32LE(0) !== EOCD64_SIG) return eocd;
+  return {
+    ...eocd,
+    entryCount: Number(rec64.readBigUInt64LE(32)),
+    cdSize: Number(rec64.readBigUInt64LE(40)),
+    cdOffset: Number(rec64.readBigUInt64LE(48)),
+  };
+}
+
+/** Parse central-directory records from `cd` (a buffer holding the directory). */
+export function parseCentralDirectory(cd, entryCount, start = 0) {
   const entries = [];
-  let p = cdOffset;
-  for (let i = 0; i < entryCount && p + 46 <= buf.length; i++) {
-    if (buf.readUInt32LE(p) !== CEN_SIG) break;
-    const method = buf.readUInt16LE(p + 10);
-    let compSize = buf.readUInt32LE(p + 20);
-    let uncompSize = buf.readUInt32LE(p + 24);
-    const nameLen = buf.readUInt16LE(p + 28);
-    const extraLen = buf.readUInt16LE(p + 30);
-    const commentLen = buf.readUInt16LE(p + 32);
-    let localOffset = buf.readUInt32LE(p + 42);
-    const name = buf.toString("utf8", p + 46, p + 46 + nameLen);
+  let p = start;
+  for (let i = 0; i < entryCount && p + 46 <= cd.length; i++) {
+    if (cd.readUInt32LE(p) !== CEN_SIG) break;
+    const flags = cd.readUInt16LE(p + 8);
+    const method = cd.readUInt16LE(p + 10);
+    const crc32 = cd.readUInt32LE(p + 16);
+    let compSize = cd.readUInt32LE(p + 20);
+    let uncompSize = cd.readUInt32LE(p + 24);
+    const nameLen = cd.readUInt16LE(p + 28);
+    const extraLen = cd.readUInt16LE(p + 30);
+    const commentLen = cd.readUInt16LE(p + 32);
+    let localOffset = cd.readUInt32LE(p + 42);
+    const name = cd.toString("utf8", p + 46, p + 46 + nameLen);
 
-    // Walk the extra field for a Zip64 record if any size/offset is saturated.
     if (compSize === 0xffffffff || uncompSize === 0xffffffff || localOffset === 0xffffffff) {
       const exStart = p + 46 + nameLen;
-      let e = exStart;
-      const exEnd = exStart + extraLen;
-      while (e + 4 <= exEnd) {
-        const id = buf.readUInt16LE(e);
-        const sz = buf.readUInt16LE(e + 2);
+      const exEnd = Math.min(exStart + extraLen, cd.length);
+      for (let e = exStart; e + 4 <= exEnd;) {
+        const id = cd.readUInt16LE(e);
+        const sz = cd.readUInt16LE(e + 2);
         let q = e + 4;
         if (id === 0x0001) {
-          if (uncompSize === 0xffffffff) { uncompSize = Number(buf.readBigUInt64LE(q)); q += 8; }
-          if (compSize === 0xffffffff) { compSize = Number(buf.readBigUInt64LE(q)); q += 8; }
-          if (localOffset === 0xffffffff) { localOffset = Number(buf.readBigUInt64LE(q)); q += 8; }
+          if (uncompSize === 0xffffffff && q + 8 <= exEnd) { uncompSize = Number(cd.readBigUInt64LE(q)); q += 8; }
+          if (compSize === 0xffffffff && q + 8 <= exEnd) { compSize = Number(cd.readBigUInt64LE(q)); q += 8; }
+          if (localOffset === 0xffffffff && q + 8 <= exEnd) { localOffset = Number(cd.readBigUInt64LE(q)); q += 8; }
           break;
         }
         e += 4 + sz;
       }
     }
-
-    entries.push({ name, method, compSize, uncompSize, localOffset, isDir: name.endsWith("/") });
+    entries.push({ name, method, crc32, compSize, uncompSize, localOffset, encrypted: (flags & 1) === 1, isDir: name.endsWith("/") });
     p += 46 + nameLen + extraLen + commentLen;
   }
+  return entries;
+}
+
+/** Offset of a member's compressed data, given its 30-byte local header. */
+export function localDataStart(localHeader, localOffset) {
+  if (localHeader.readUInt32LE(0) !== LOC_SIG) throw new Error("bad ZIP local header");
+  return localOffset + 30 + localHeader.readUInt16LE(26) + localHeader.readUInt16LE(28);
+}
+
+/** Read a whole archive held in memory. options.inflateRaw(buf) -> buf. */
+export function readZip(buf, { inflateRaw } = {}) {
+  let eocd = findEOCD(buf);
+  if (eocd.zip64EndOffset != null && (eocd.entryCount === 0xffff || eocd.cdOffset === 0xffffffff)) {
+    eocd = applyZip64End(eocd, buf.subarray(eocd.zip64EndOffset, eocd.zip64EndOffset + 56));
+  }
+  const entries = parseCentralDirectory(buf, eocd.entryCount, eocd.cdOffset);
 
   const extract = (entry) => {
-    if (entry.isDir) return Buffer.alloc(0);
-    const lo = entry.localOffset;
-    if (buf.readUInt32LE(lo) !== LOC_SIG) throw new Error(`bad local header for ${entry.name}`);
-    const lnameLen = buf.readUInt16LE(lo + 26);
-    const lextraLen = buf.readUInt16LE(lo + 28);
-    const dataStart = lo + 30 + lnameLen + lextraLen;
-    const raw = buf.subarray(dataStart, dataStart + entry.compSize);
+    if (entry.isDir) return buf.subarray(0, 0);
+    if (entry.encrypted) throw new Error(`${entry.name} is password-encrypted`);
+    const start = localDataStart(buf.subarray(entry.localOffset, entry.localOffset + 30), entry.localOffset);
+    const raw = buf.subarray(start, start + entry.compSize);
     if (entry.method === 0) return Buffer.from(raw);
-    if (entry.method === 8) return inflateRawSync(raw);
+    if (entry.method === 8) {
+      if (!inflateRaw) throw new Error("no DEFLATE decompressor available");
+      return inflateRaw(raw);
+    }
     throw new Error(`unsupported compression method ${entry.method} for ${entry.name}`);
   };
 
   return { entries, extract };
-}
-
-function findEOCD(buf) {
-  const minPos = Math.max(0, buf.length - 65557); // max comment 65535 + 22
-  for (let pos = buf.length - 22; pos >= minPos; pos--) {
-    if (buf.readUInt32LE(pos) === EOCD_SIG) {
-      return {
-        pos,
-        entryCount: buf.readUInt16LE(pos + 10),
-        cdOffset: buf.readUInt32LE(pos + 16),
-      };
-    }
-  }
-  throw new Error("not a ZIP/IPA: end-of-central-directory not found");
 }

@@ -21,6 +21,48 @@ it was derived and what its limits are.
 
 Zero dependencies. Node 20+. MIT.
 
+## Use it on your iPhone (web app, no App Store)
+
+The static analysis also runs as a **web app you add to your home screen**.
+There is no App Store listing, no developer account, and no cost. Everything
+runs inside Safari on the phone. The `.ipa` you open is read in place and
+never uploaded.
+
+1. Open the web app in Safari (see *Hosting* below for the link).
+2. Tap **Share › Add to Home Screen**.
+3. Open it from the home screen and tap **Open app** to pick an `.ipa`, a
+   zipped `.app`, or a Mach-O binary from the Files app, iCloud Drive, or a
+   download.
+
+You get the same analysis as the command line: overview and security
+findings, the Objective-C class-dump, Swift types, classified strings,
+symbols, a Frida script builder, and a Swift demangler. You can switch between
+the app, its frameworks and its extensions, and between architecture slices.
+
+How it handles large apps on a phone:
+
+- It reads the `.ipa`'s ZIP index from the end of the file. It then
+  decompresses **only the files it needs** (bundle metadata plus the selected
+  binary), using Safari's built-in decompressor, so a 300 MB app costs
+  about the size of its main binary.
+- Analysis runs in a background Web Worker, so scrolling stays smooth.
+- After the first visit it works **offline** (service worker).
+
+The device and Frida *runner* layers need a computer: a browser can't drive a
+phone over USB. The web app writes the Frida script and the exact command for
+you to run there.
+
+### Hosting
+
+- **GitHub Pages (free, installable, offline):** Pages is free for *public*
+  repositories. Make the repository public, then set **Settings › Pages ›
+  Source: GitHub Actions**. Every push to `main` runs the tests and deploys
+  `https://<user>.github.io/rea-iphone/`. The workflow skips deploying while
+  the repository is private.
+- **Any static host:** `npm run build:web` writes the site to `site/`.
+  Upload that folder anywhere that serves static files over HTTPS.
+- **Locally:** `npm run serve:web`, then open http://127.0.0.1:8080/.
+
 ```bash
 git clone https://github.com/lucasbushkuhl/rea-iphone && cd rea-iphone
 node bin/rea-iphone.js analyze examples/Demo.ipa --deep
@@ -224,7 +266,7 @@ lists. Both relative and pointer-based lists are supported.
 
 ## How it's verified
 
-The test suite (`npm test`: 56 tests, about 2 s, no tools or devices needed)
+The test suite (`npm test`: 62 tests, a few seconds, no tools or devices needed)
 runs against **real linked arm64 Mach-O binaries**, not mocks:
 
 - `test/fixtures/src/` holds an Objective-C source file and two hand-laid
@@ -249,6 +291,14 @@ runs against **real linked arm64 Mach-O binaries**, not mocks:
   and the `ideviceinstaller` syntax fallback.
 - The MCP server is tested at the protocol level and through a live stdio
   session.
+- The web app's build is checked: no Node built-ins reach the browser bundle,
+  and the PWA head and offline precache are present. The browser `Buffer` is
+  compared against Node's `Buffer`. The engine runs through the same
+  Blob/stream path Safari uses, and must reproduce the CLI's results,
+  including the gzip fallback for browsers without raw-deflate streams. The UI
+  runs in headless Chromium at iPhone size, in light and dark: it uses the
+  worker, has no sideways scrolling or console errors, opens files, and
+  reloads offline.
 - **Robustness:** mutation fuzzing of both fixup formats, plus truncation tests
   and hostile Swift symbols. Malformed input yields limitations, never crashes,
   hangs, or unbounded work. In development fuzzing, 3,000 mutants produced zero
@@ -294,6 +344,20 @@ src/
   frida/runner.js    frida CLI driver + event parser
   mcp/server.js      MCP stdio server (JSON-RPC 2.0)
   util/exec.js       safe process execution (argv only, process groups, timeouts)
+  util/sha256.js     SHA-256 in plain JavaScript (Node and browsers)
+  bundle.js          app-bundle logic shared by Node and the web app
+  analyzeSource.js   report orchestrator (environment-independent)
+web/
+  index.html         the app page (mobile-first, light and dark)
+  app.js             UI
+  engine.js          analysis engine (runs in worker.js)
+  blobzip.js         streaming ZIP access over a File, no full load
+  buffer.js          the Node Buffer API subset, for browsers
+  sw.js              offline cache
+scripts/
+  build-web.mjs      builds site/ and refuses any Node built-in in the bundle
+  serve.mjs          local static server
+  make-icons.mjs     generates the home-screen icons
 ```
 
 Every external tool is run with an argv array, never a shell. Each tool gets

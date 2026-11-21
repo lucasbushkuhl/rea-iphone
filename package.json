@@ -1,7 +1,7 @@
 {
   "name": "rea-iphone",
-  "version": "0.2.0",
-  "description": "Reverse Engineer Anything — iPhone edition. Static, execution-free iOS app analysis (Mach-O, chained fixups, Objective-C class-dump, Swift metadata + demangling, symbols, classified strings, entitlements, provisioning), a libimobiledevice device layer, a Frida observation bridge, and an MCP server. Zero dependencies.",
+  "version": "0.3.0",
+  "description": "Reverse Engineer Anything \u2014 iPhone edition. Static, execution-free iOS app analysis (Mach-O, chained fixups, Objective-C class-dump, Swift metadata + demangling, symbols, classified strings, entitlements, provisioning), a libimobiledevice device layer, a Frida observation bridge, and an MCP server. Also a phone-installable web app (PWA) that runs the static analysis on-device. Zero dependencies.",
   "type": "module",
   "bin": {
     "rea-iphone": "bin/rea-iphone.js"
@@ -20,7 +20,9 @@
     "./device": "./src/device/idevice.js",
     "./frida": "./src/frida/scripts.js",
     "./frida/runner": "./src/frida/runner.js",
-    "./mcp": "./src/mcp/server.js"
+    "./mcp": "./src/mcp/server.js",
+    "./analyzeSource": "./src/analyzeSource.js",
+    "./bundle": "./src/bundle.js"
   },
   "files": [
     "bin/",
@@ -30,9 +32,12 @@
   ],
   "scripts": {
     "test": "node --test 'test/*.test.js'",
+    "build:web": "node scripts/build-web.mjs",
+    "serve:web": "node scripts/build-web.mjs && node scripts/serve.mjs site 8080",
+    "build:icons": "node scripts/make-icons.mjs",
+    "build:fixtures": "test/fixtures/build.sh",
     "analyze": "node bin/rea-iphone.js analyze",
-    "mcp": "node bin/rea-iphone.js mcp",
-    "build:fixtures": "test/fixtures/build.sh"
+    "mcp": "node bin/rea-iphone.js mcp"
   },
   "engines": {
     "node": ">=20"

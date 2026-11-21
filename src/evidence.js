@@ -2,12 +2,12 @@
 // how it was derived, and the limitation behind the conclusion. Nothing here
 // executes the target; all facts are static.
 
-import { createHash } from "node:crypto";
+import { sha256Hex } from "./util/sha256.js";
 
 let counter = 0;
 
 export function sha256(buf) {
-  return createHash("sha256").update(buf).digest("hex");
+  return sha256Hex(buf);
 }
 
 export function evidence({ kind, path, facts, method, limitations = [] }) {

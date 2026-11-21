@@ -16,7 +16,10 @@
 //   { kind: "null" }                                 zero slot, no fixup
 //   null                                             unmapped address
 
-import { inflateSync } from "node:zlib";
+// Optional synchronous zlib inflater for the rare compressed chained-fixup
+// symbol pool. Node installs one (see target.js); elsewhere it is reported.
+let syncInflate = null;
+export function setSyncInflate(fn) { syncInflate = fn; }
 
 const PTR_FORMAT = {
   1: "DYLD_CHAINED_PTR_ARM64E",
@@ -175,7 +178,8 @@ export function parseChainedFixups(image) {
   let symbolPool = buf.subarray(h + symbolsOff, h + image.chainedFixups.datasize);
   if (symbolsFormat === 1) {
     try {
-      symbolPool = inflateSync(symbolPool);
+      if (!syncInflate) throw new Error("no zlib inflater in this environment");
+      symbolPool = syncInflate(symbolPool);
     } catch (err) {
       limitations.push(`Compressed chained-fixup symbol pool could not be inflated: ${err.message}`);
     }
