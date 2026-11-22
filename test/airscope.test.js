@@ -286,14 +286,39 @@ test("Airscope in headless Chromium", { skip: !pw && "Playwright not installed",
     await pl.waitForSelector("#bt-start", { timeout: 5000 });
     await late.close();
 
-    // Pick-only browsers get the single-device follow mode.
+    // Pick-only browsers (Bluefy): follow several devices picked one by one.
     const pickCtx = await browser.newContext({ viewport: { width: 390, height: 844 } });
-    await pickCtx.addInitScript(`Object.defineProperty(navigator, "bluetooth", { configurable: true, value: { requestDevice: async () => ({ id: "p1", name: "Geotab GO9", addEventListener() {}, removeEventListener() {} }) } });`);
+    await pickCtx.addInitScript(`(() => {
+      const devices = [
+        { id: "p1", name: "Geotab GO9", live: true },
+        { id: "p2", name: "S1a2b3c4d5e6f7a8bC", live: false },
+        { id: "p1", name: "Geotab GO9", live: true },
+      ];
+      let i = 0;
+      Object.defineProperty(navigator, "bluetooth", { configurable: true, value: { requestDevice: async () => {
+        const spec = devices[i++];
+        const listeners = [];
+        const dev = { id: spec.id, name: spec.name, addEventListener: (t, f) => listeners.push(f), removeEventListener() {} };
+        if (spec.live) dev.watchAdvertisements = async () => { setInterval(() => listeners.forEach((f) => f({ rssi: -60, manufacturerData: new Map(), serviceData: new Map(), uuids: [] })), 150); };
+        return dev;
+      } } });
+    })();`);
     const pp = await pickCtx.newPage();
     await pp.goto("http://127.0.0.1:8399/airscope/");
     await pp.click("#pick");
-    await pp.waitForFunction(() => document.querySelectorAll(".dev").length === 1);
-    assert.equal(await pp.$eval(".dev .t", (e) => e.textContent), "Fleet telematics (by name)");
+    await pp.waitForFunction(() => /Following 1 device/.test(document.querySelector("#support").textContent));
+    await pp.click("#pick");
+    await pp.waitForFunction(() => /Following 2 devices/.test(document.querySelector("#support").textContent));
+    assert.match(await pp.$eval("#support", (e) => e.textContent), /didn't send live signal strength for 1 of them/);
+    await pp.waitForTimeout(1200);
+    const followed = await pp.$$eval(".dev .t", (n) => n.map((x) => x.textContent).sort());
+    assert.deepEqual(followed, ["Fleet telematics (by name)", "Tesla vehicle"]);
+    assert.match(await pp.$eval('.dev[data-dev="p1"] .r', (e) => e.textContent), /-60/, "live device shows signal");
+    await pp.click("#pick");
+    await pp.waitForFunction(() => /Already following/.test(document.querySelector("#toast").textContent));
+    assert.match(await pp.$eval("#support", (e) => e.textContent), /Following 2 devices/);
+    await pp.click("#stop-all");
+    assert.match(await pp.$eval("#support", (e) => e.textContent), /Pick the devices to follow/);
     await pickCtx.close();
 
     const ios = await browser.newContext({ ...pw.devices["iPhone 13"], deviceScaleFactor: 1 });

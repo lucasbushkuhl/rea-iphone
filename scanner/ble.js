@@ -103,14 +103,18 @@ export async function startScan(onAdvert, nav = globalThis.navigator) {
 export async function pickAndWatch(onAdvert, nav = globalThis.navigator) {
   const device = await nav.bluetooth.requestDevice({ acceptAllDevices: true });
   const handler = (e) => onAdvert({ id: device.id, name: device.name, rssi: e.rssi, txPower: e.txPower, manufacturerData: e.manufacturerData, serviceData: e.serviceData, uuids: e.uuids });
+  onAdvert({ id: device.id, name: device.name });
+  let live = false;
   if (typeof device.watchAdvertisements === "function") {
     device.addEventListener("advertisementreceived", handler);
-    await device.watchAdvertisements();
-  } else {
-    onAdvert({ id: device.id, name: device.name });
+    try {
+      await device.watchAdvertisements();
+      live = true;
+    } catch { /* this browser can't stream the device's signal */ }
   }
   return {
     device,
+    live,
     stop() {
       try { device.unwatchAdvertisements?.(); } catch { /* ignore */ }
       device.removeEventListener?.("advertisementreceived", handler);

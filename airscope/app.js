@@ -27,6 +27,7 @@ let watch = store.get("watch", []);
 let mute = store.get("mute", []);
 let session = new Session({ watch, mute });
 let scan = null;
+let followers = []; // devices picked one at a time (browsers without a full scan)
 let geo = null;
 let geoWatch = null;
 let catFilter = null;
@@ -73,8 +74,11 @@ function renderSupport() {
     el.innerHTML = `<button class="btn primary block" type="button" id="start">Start scan</button>`;
     $("#start").onclick = start;
   } else if (level === "pick") {
-    el.innerHTML = `<div class="note"><strong>This browser can follow one device at a time</strong><p>It shows its own list of nearby devices; pick one and Airscope tracks it live. A full scan isn't offered by this browser version.</p><button class="btn primary block" type="button" id="pick">Choose a device</button><p class="muted mono" style="font-size:11px">${esc(diagnostics())}</p></div>`;
+    const n = followers.length;
+    const noLive = followers.filter((f) => !f.live).length;
+    el.innerHTML = `<div class="note"><strong>${n ? `Following ${n} device${n === 1 ? "" : "s"}` : "Pick the devices to follow"}</strong><p>This browser can't scan everything at once. Tap <em>Add a device</em>, pick one from its list, and repeat for as many as you like. Airscope follows them all together.</p>${noLive ? `<p style="color:var(--warn)">This browser didn't send live signal strength for ${noLive === n ? "these devices" : `${noLive} of them`}, so their signal won't update.</p>` : ""}<div class="row"><button class="btn primary" type="button" id="pick" style="flex:1">${n ? "Add another device" : "Add a device"}</button>${n ? '<button class="btn" type="button" id="stop-all">Stop all</button>' : ""}</div><p class="muted mono" style="font-size:11px">${esc(diagnostics())}</p></div>`;
     $("#pick").onclick = pick;
+    if (n) $("#stop-all").onclick = stop;
   } else if (isIOS) {
     el.innerHTML = `<div class="note warn"><strong>Waiting for Bluetooth</strong><p>If this page is open in <strong>Bluefy</strong>, wait a second or pull down to reload. Safari on iPhone has no Bluetooth access, so for scanning, open this page in Bluefy (free on the App Store). Watchlist, log and exports work anywhere.</p><div class="row"><button class="btn" type="button" id="recheck">Check again</button><button class="btn" type="button" id="copy-link">Copy link</button></div><p class="muted mono" style="font-size:11px">${esc(diagnostics())}</p></div>`;
     $("#recheck").onclick = () => { renderSupport(); if (lastLevel === "none") toast("Still no Bluetooth in this browser."); };
@@ -99,11 +103,18 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden && !s
 
 async function pick() {
   try { audio ??= new (window.AudioContext || window.webkitAudioContext)(); audio.resume(); } catch { audio = null; }
+  let f;
   try {
-    scan = await pickAndWatch(onAdvert);
+    f = await pickAndWatch(onAdvert);
   } catch (err) {
     toast(explainBluetoothError(err));
     return;
+  }
+  if (followers.some((x) => x.device.id === f.device.id)) {
+    toast("Already following that device.");
+  } else {
+    followers.push(f);
+    toast(`Following ${f.device.name || "device"}`);
   }
   if ($("#geo-tag").checked) startGeo();
   renderSupport();
@@ -126,6 +137,8 @@ async function start() {
 function stop() {
   scan?.stop();
   scan = null;
+  for (const f of followers) f.stop();
+  followers = [];
   stopGeo();
   renderSupport();
   tick();
@@ -227,7 +240,7 @@ function drawRadar() {
     }
   }
   const now = Date.now();
-  for (const d of session.list(now, 30000)) {
+  for (const d of session.list(now, followers.length ? null : 30000)) {
     if (catFilter && d.category !== catFilter) continue;
     const rssi = d.rssi ?? -100;
     const r = Math.min(1, Math.max(0.06, (-rssi - 35) / 60)) * R;
@@ -251,7 +264,7 @@ function drawRadar() {
 // ---------------------------------------------------------------- list & counters
 
 function renderCounters() {
-  const counts = session.counts(Date.now(), 60000);
+  const counts = session.counts(Date.now(), followers.length ? null : 60000);
   const keys = Object.keys(CATEGORIES).filter((k) => counts[k]);
   $("#counters").innerHTML = keys.length ? keys.map((k) => `<button class="counter" type="button" data-cat="${k}" aria-pressed="${catFilter === k}"><b>${counts[k]}</b><span><i class="dot" style="background:${CATEGORIES[k].color}"></i>${esc(CATEGORIES[k].label)}</span></button>`).join("") : "";
 }
@@ -265,7 +278,7 @@ $("#counters").addEventListener("click", (e) => {
 function renderList() {
   const now = Date.now();
   const hide = $("#hide-common").checked;
-  const list = session.list(now, 60000).filter((d) => (!catFilter || d.category === catFilter) && (!hide || (d.category !== "phone" && d.category !== "audio")));
+  const list = session.list(now, followers.length ? null : 60000).filter((d) => (!catFilter || d.category === catFilter) && (!hide || (d.category !== "phone" && d.category !== "audio")));
   $("#list-title").textContent = catFilter ? `${CATEGORIES[catFilter].label} nearby` : "Nearby now";
   $("#devs").innerHTML = list.length ? list.slice(0, 200).map((d) => {
     const ago = Math.round((now - d.lastSeen) / 1000);
@@ -458,9 +471,9 @@ $("#ssids").addEventListener("input", renderSsids);
 let lastList = 0;
 function tick() {
   const st = $("#status");
-  if (scan) {
+  if (scan || followers.length) {
     const s = Math.floor((Date.now() - session.startedAt) / 1000);
-    st.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")} · ${session.list(Date.now(), 60000).length}`;
+    st.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")} · ${followers.length ? `${followers.length} followed` : session.list(Date.now(), 60000).length}`;
     st.className = "status live";
   } else {
     st.textContent = "Idle";
@@ -476,7 +489,7 @@ function frame() {
   try {
     drawRadar();
   } catch { /* skip this frame's drawing */ }
-  if (scan && Date.now() - lastList > 800) tick();
+  if ((scan || followers.length) && Date.now() - lastList > 800) tick();
 }
 
 renderSupport();
