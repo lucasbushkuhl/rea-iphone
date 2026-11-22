@@ -25,8 +25,70 @@ export const CATEGORIES = {
   audio: { label: "Audio", color: "#8fb8ff" },
   phone: { label: "Phone & computer", color: "#7fd6b4" },
   other: { label: "Other", color: "#8fa19b" },
+  alpr: { label: "License-plate camera", color: "#ff4fa3" },
+  network: { label: "Wi-Fi network", color: "#4f8fbf" },
   unknown: { label: "Unknown", color: "#5f706b" },
 };
+
+// ------------------------------------------------------------ addresses
+
+/**
+ * Manufacturer address prefixes (IEEE OUIs) with a known meaning. Only
+ * prefixes with a clear association are listed, as "likely" matches; add
+ * more as custom signatures in the app.
+ */
+export const OUI = {
+  "00:25:DF": ["publicsafety", "Axon device (body camera, TASER or Signal)", "Axon Enterprise"],
+  "00:30:44": ["fleet", "Cradlepoint vehicle router", "Cradlepoint"],
+  "00:A0:D5": ["fleet", "Sierra Wireless AirLink router", "Sierra Wireless"],
+  "60:60:1F": ["drone", "DJI drone or controller", "DJI"],
+  "4C:FC:AA": ["vehicle", "Tesla vehicle", "Tesla"],
+};
+const VEHICLE_ROUTER_NOTE = " Rugged routers like this are standard in police, fire, EMS, transit and utility fleet vehicles.";
+
+export function ouiOf(mac) {
+  const m = /^([0-9a-f]{2})[:-]?([0-9a-f]{2})[:-]?([0-9a-f]{2})/i.exec(mac ?? "");
+  return m ? `${m[1]}:${m[2]}:${m[3]}`.toUpperCase() : null;
+}
+
+/** Locally administered addresses are randomized and say nothing about the maker. */
+export function isRandomizedMac(mac) {
+  const first = parseInt(String(mac ?? "").slice(0, 2), 16);
+  return Number.isFinite(first) && (first & 0x02) === 0x02;
+}
+
+function ouiMatch(mac) {
+  if (!mac || isRandomizedMac(mac)) return null;
+  const hit = OUI[ouiOf(mac)];
+  if (!hit) return null;
+  const [category, label, maker] = hit;
+  return { category, label, vendor: maker, confidence: "likely", reason: `Hardware address prefix ${ouiOf(mac)} belongs to ${maker}.${category === "fleet" ? VEHICLE_ROUTER_NOTE : ""}`, concern: category === "publicsafety" || category === "drone" ? "medium" : "none", details: {} };
+}
+
+// ------------------------------------------------------------ custom signatures
+
+/** User-defined signatures: { kind: "mac" | "name", value, category, label }. */
+let custom = [];
+export function setCustomSignatures(list) {
+  custom = (list ?? []).filter((r) => r && r.value && CATEGORIES[r.category]).map((r) => {
+    let test;
+    if (r.kind === "mac") {
+      const prefix = String(r.value).toLowerCase().replace(/[^0-9a-f]/g, "");
+      test = ({ mac }) => !!mac && mac.toLowerCase().replace(/[^0-9a-f]/g, "").startsWith(prefix);
+    } else {
+      const m = /^\/(.+)\/([a-z]*)$/.exec(r.value);
+      let re = null;
+      if (m) { try { re = new RegExp(m[1], m[2].includes("i") ? m[2] : `${m[2]}i`); } catch { re = null; } }
+      const needle = String(r.value).toLowerCase();
+      test = ({ name }) => !!name && (re ? re.test(name) : name.toLowerCase().includes(needle));
+    }
+    return { ...r, test };
+  });
+}
+function customMatch(fields) {
+  const r = custom.find((x) => x.test(fields));
+  return r ? { category: r.category, label: r.label || CATEGORIES[r.category].label, vendor: null, confidence: "custom", reason: `Matches your custom signature "${r.value}".`, concern: "medium", details: {} } : null;
+}
 
 // ------------------------------------------------------------ Remote ID
 
@@ -152,6 +214,7 @@ const COMPANY = {
 };
 
 const NAME_RULES = [
+  { re: /flock/i, category: "alpr", label: "Possible Flock Safety camera (by name)", confidence: "possible" },
   { re: /^S[0-9a-f]{16}[CDPR]$/i, category: "vehicle", label: "Tesla vehicle", confidence: "likely", reason: "Tesla vehicle Bluetooth name format (S + 16 hex + letter)." },
   { re: /\b(dji|mavic|phantom|tello|autel|skydio|parrot|anafi|fimi)\b/i, category: "drone", label: "Drone or controller (by name)", confidence: "possible" },
   { re: /\b(geotab|samsara|calamp|verizon ?connect|motive|keeptruckin|lytx|omnitracs|teletrac|zonar|gps ?trackit|fleet|eld)\b/i, category: "fleet", label: "Fleet telematics (by name)", confidence: "possible" },
@@ -171,6 +234,8 @@ const TRACKER_TO_CATEGORY = { tracker: "tracker", camera: "camera", audio: "audi
  */
 export function classifyAdvert(raw) {
   const a = raw.manufacturer instanceof Map ? raw : normalizeAdvert(raw);
+  const mine = customMatch({ mac: a.mac, name: a.name });
+  if (mine) return mine;
 
   // Drone Remote ID (public by regulation in the US, EU and elsewhere).
   const rid = decodeRemoteId(a.service.get("fffa"));
@@ -205,6 +270,9 @@ export function classifyAdvert(raw) {
     return { category: TRACKER_TO_CATEGORY[t.category] ?? "other", label: t.label, vendor: t.vendor, confidence: t.confidence, reason: t.reason, concern: t.concern, details: {} };
   }
 
+  const byAddress = ouiMatch(a.mac);
+  if (byAddress) return byAddress;
+
   if (a.name) {
     for (const r of NAME_RULES) {
       if (r.re.test(a.name)) {
@@ -232,19 +300,68 @@ export function classifyAdvert(raw) {
 /** Classify a Wi-Fi network name (typed or pasted on iPhone; scanned elsewhere). */
 const SSID_RULES = [
   { re: /^(dji|mavic|phantom|tello|anafi|skydio|autel)[-_ ]/i, category: "drone", label: "Drone Wi-Fi" },
-  { re: /^(ibr\d|cradlepoint|cp[-_ ]?\w+|sierra[-_ ]?wireless|airlink|mg90|digi[-_ ]?\w+|inseego|mifi)/i, category: "fleet", label: "Vehicle or mobile router" },
+  { re: /^(ibr\d{3,4}|r1900|r920|e300|e3000|cba850|aer\d{4}|cradlepoint)/i, category: "fleet", label: "Cradlepoint vehicle router", note: VEHICLE_ROUTER_NOTE },
+  { re: /\b(mp70|rv50x?|rv55|lx40|lx60|xr80|xr90|airlink|sierra[-_ ]?wireless)\b/i, category: "fleet", label: "Sierra Wireless AirLink vehicle router", note: VEHICLE_ROUTER_NOTE },
+  { re: /flock/i, category: "alpr", label: "Possible Flock Safety camera" },
+  { re: /^(mg90|digi[-_ ]?\w+|inseego|mifi)/i, category: "fleet", label: "Vehicle or mobile router" },
   { re: /(geotab|samsara|fleet|eld|truck)/i, category: "fleet", label: "Fleet telematics" },
   { re: /(tesla|fordpass|onstar|my ?car|uconnect|bmw|audi|vw[-_ ]|toyota|hyundai|kia|carplay)/i, category: "vehicle", label: "Vehicle hotspot" },
   { re: /(axon|watchguard|body ?cam)/i, category: "publicsafety", label: "Public-safety equipment" },
   { re: /^(ipc|ipcam|hd[-_ ]?cam|wifi[-_ ]?cam|v380|yoosee|icsee|xmeye|lookcam|dashcam|gopro|blackvue|insta360)/i, category: "camera", label: "Camera hotspot" },
+  { re: /^(iphone|galaxy|pixel|androidap|oneplus|redmi|moto)/i, category: "phone", label: "Phone hotspot" },
   { re: /(chargepoint|evgo|electrify|parking|transit|kiosk|xfinitywifi|attwifi|guest)/i, category: "infrastructure", label: "Public or infrastructure network" },
 ];
 
 export function classifySsid(ssid) {
   const s = String(ssid ?? "").trim();
   if (!s) return null;
-  for (const r of SSID_RULES) if (r.re.test(s)) return { ssid: s, category: r.category, label: r.label, confidence: "possible" };
+  for (const r of SSID_RULES) if (r.re.test(s)) return { ssid: s, category: r.category, label: r.label, confidence: "possible", note: r.note ?? "" };
   return { ssid: s, category: "unknown", label: "No match", confidence: "unknown" };
+}
+
+/** Wi-Fi security summary from Android's capability string, e.g. "[WPA2-PSK-CCMP][ESS]". */
+export function wifiSecurity(capabilities = "") {
+  const c = String(capabilities);
+  if (/WPA3|SAE/.test(c)) return "WPA3";
+  if (/WPA2|RSN/.test(c)) return "WPA2";
+  if (/WPA/.test(c)) return "WPA";
+  if (/WEP/.test(c)) return "WEP";
+  return /OWE/.test(c) ? "Enhanced Open" : "Open";
+}
+
+export function wifiBand(mhz) {
+  if (!mhz) return null;
+  if (mhz >= 5925) return "6 GHz";
+  if (mhz >= 4900) return "5 GHz";
+  return "2.4 GHz";
+}
+
+const hexBytes = (h) => Uint8Array.from((String(h).match(/[0-9a-f]{2}/gi) ?? []).map((b) => parseInt(b, 16)));
+
+/**
+ * Classify a Wi-Fi access point { bssid, ssid, rssi, frequency, capabilities,
+ * vendorIes: [hex] }. Vendor information elements may carry drone Remote ID
+ * (OUI FA:0B:BC, type 0x0D).
+ */
+export function classifyWifi(n) {
+  const ssid = String(n.ssid ?? "").trim();
+  const details = { ssid: ssid || null, band: wifiBand(n.frequency), security: wifiSecurity(n.capabilities), randomized: isRandomizedMac(n.bssid) };
+  for (const ie of n.vendorIes ?? []) {
+    const b = hexBytes(ie);
+    if (b[0] === 0xfa && b[1] === 0x0b && b[2] === 0xbc && b[3] === 0x0d) {
+      const rid = decodeRemoteId(b.subarray(3));
+      if (rid) return { category: "drone", label: rid.uasId ? `Drone · ${rid.uasId}` : "Drone (Wi-Fi Remote ID)", vendor: null, confidence: "certain", reason: "Broadcast Remote ID (ASTM F3411) in Wi-Fi beacons.", concern: "medium", details: { ...details, remoteId: rid } };
+    }
+  }
+  const mine = customMatch({ mac: n.bssid, name: ssid });
+  if (mine) return { ...mine, details };
+  const byAddress = ouiMatch(n.bssid);
+  if (byAddress) return { ...byAddress, details };
+  const s = classifySsid(ssid);
+  if (s && s.category !== "unknown") {
+    return { category: s.category, label: s.label, vendor: null, confidence: "possible", reason: `Network name "${ssid}" matches ${CATEGORIES[s.category].label.toLowerCase()} patterns.${s.note ?? ""}`, concern: s.category === "publicsafety" || s.category === "alpr" || s.category === "drone" ? "medium" : "none", details };
+  }
+  return { category: "network", label: ssid || "Hidden network", vendor: null, confidence: "certain", reason: `${details.security} Wi-Fi network on ${details.band ?? "an unknown band"}.`, concern: "none", details };
 }
 
 export { CONCERN };

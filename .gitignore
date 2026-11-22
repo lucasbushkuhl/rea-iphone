@@ -2,3 +2,8 @@ node_modules/
 examples/work/
 site/
 *.log
+android/.gradle/
+android/build/
+android/app/build/
+android/app/src/main/assets/
+android/local.properties

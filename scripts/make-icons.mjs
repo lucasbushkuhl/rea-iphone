@@ -158,3 +158,11 @@ function renderAir(size, k) {
 }
 for (const [name, size, k] of SIZES) writeFileSync(join(AIR_OUT, name), renderAir(size, k * 1.1));
 console.log(`icons written to ${AIR_OUT}`);
+
+// ---- Android launcher icons for the Airscope app.
+const RES = join(dirname(fileURLToPath(import.meta.url)), "..", "android", "app", "src", "main", "res");
+for (const [dir, size] of [["mipmap-mdpi", 48], ["mipmap-hdpi", 72], ["mipmap-xhdpi", 96], ["mipmap-xxhdpi", 144], ["mipmap-xxxhdpi", 192]]) {
+  mkdirSync(join(RES, dir), { recursive: true });
+  writeFileSync(join(RES, dir, "ic_launcher.png"), renderAir(size, 1.1));
+}
+console.log(`icons written to ${RES}`);

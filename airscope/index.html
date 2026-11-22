@@ -128,7 +128,7 @@ nav.tabs button[aria-selected="true"] { color: var(--accent); }
     <div id="support"></div>
     <div class="radar"><canvas id="radar" aria-label="Radar of nearby Bluetooth devices"></canvas><div class="legend">Center = strongest signal · angle is not direction</div></div>
     <div class="counters" id="counters"></div>
-    <div class="row" style="justify-content:space-between"><h2 id="list-title">Nearby now</h2><label class="check" style="font-size:13.5px"><input id="hide-common" type="checkbox"> Hide phones &amp; audio</label></div>
+    <div class="row" style="justify-content:space-between"><h2 id="list-title">Nearby now</h2><label class="check" style="font-size:13.5px"><input id="hide-common" type="checkbox"> Hide everyday devices</label></div>
     <div class="devs" id="devs"></div>
   </section>
 
@@ -140,7 +140,7 @@ nav.tabs button[aria-selected="true"] { color: var(--accent); }
       <form class="addrule" id="watch-form">
         <label class="vh" for="watch-kind" hidden>Match on</label>
         <select id="watch-kind" class="field">
-          <option value="keyword">Keyword</option><option value="category">Category</option><option value="company">Company ID</option><option value="service">Service UUID</option><option value="device">Device ID</option>
+          <option value="keyword">Keyword</option><option value="category">Category</option><option value="company">Company ID</option><option value="service">Service UUID</option><option value="mac">Address prefix</option><option value="device">Device ID</option>
         </select>
         <input id="watch-value" class="field" placeholder="e.g. geotab, Tesla, /^1581F5/" autocomplete="off" autocapitalize="off" spellcheck="false">
         <select id="watch-category" class="field" hidden></select>
@@ -154,6 +154,18 @@ nav.tabs button[aria-selected="true"] { color: var(--accent); }
       <p class="muted">Muted devices never alert and are hidden from the live list. Mute single devices from their detail sheet, or add a keyword.</p>
       <form class="row" id="mute-form"><input id="mute-value" class="field" style="flex:1 1 200px" placeholder="Keyword to mute" autocomplete="off" autocapitalize="off" spellcheck="false"><button class="btn" type="submit">Mute</button></form>
       <div class="rules" id="mute-rules"></div>
+    </div>
+    <div class="panel">
+      <h2>Custom signatures</h2>
+      <p class="muted">Teach Airscope to recognize equipment: an address prefix (the first part of a hardware address, which identifies the maker) or a name. Matches get your label and category, and you can watch them like anything else. Address prefixes work in the Android app.</p>
+      <form class="addrule" id="custom-form">
+        <select id="custom-kind" class="field" aria-label="Match on"><option value="mac">Address prefix</option><option value="name">Name</option></select>
+        <input id="custom-value" class="field" placeholder="e.g. 00:30:44 or flock, or /^penguin/" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Prefix or name">
+        <select id="custom-category" class="field" aria-label="Category"></select>
+        <input id="custom-label" class="field" placeholder="Label, e.g. Flock camera" autocomplete="off" aria-label="Label">
+        <button class="btn" type="submit">Add signature</button>
+      </form>
+      <div class="rules" id="custom-rules"></div>
     </div>
     <div class="panel"><h2>Recent alerts</h2><div class="rules" id="alert-log"><p class="muted">None yet.</p></div></div>
   </section>
@@ -185,7 +197,7 @@ nav.tabs button[aria-selected="true"] { color: var(--accent); }
   <!-- About -->
   <section class="view" id="view-about" data-name="about" hidden>
     <div class="panel"><h2>What Airscope does</h2><p>It listens for Bluetooth Low Energy advertisements, the short public broadcasts devices send so others can find them, and classifies what it hears. It never connects to, pairs with, or sends anything to another device. Everything runs on this phone.</p></div>
-    <div class="panel"><h2>Where it scans</h2><p><strong>iPhone:</strong> open this page in <strong>Bluefy</strong>, a free web browser with Bluetooth support. Safari has no Bluetooth access. <strong>Android, Mac, PC:</strong> Chrome with <span class="mono">chrome://flags</span> › Experimental Web Platform features turned on.</p></div>
+    <div class="panel"><h2>Where it scans</h2><p><strong>Android app:</strong> full live scan of Bluetooth devices and Wi-Fi networks, with hardware addresses. Android allows 4 Wi-Fi scans every 2 minutes; to scan faster, turn off <em>Settings › Developer options › Wi-Fi scan throttling</em>. <strong>iPhone:</strong> open this page in <strong>Bluefy</strong>, a free web browser with Bluetooth support. Safari has no Bluetooth access. <strong>Android, Mac, PC:</strong> Chrome with <span class="mono">chrome://flags</span> › Experimental Web Platform features turned on.</p></div>
     <div class="panel"><h2>What it can't do on iPhone</h2><p><strong>Wi-Fi scanning:</strong> Apple blocks every iPhone app and website from listing Wi-Fi networks. <strong>Direction or exact location:</strong> one phone's signal strength gives rough closeness, not a bearing, and the radar's angles are arbitrary. iOS may hide some Apple Find My broadcasts from browsers.</p></div>
     <div class="panel"><h2>Classifications</h2><p>Drones are decoded from their Remote ID broadcast (serial number, position, altitude), which drone rules require to be public. Beacons and trackers are identified by published formats. Vehicles, fleet equipment, cameras and public-safety gear are mostly matched by name, which is weaker: names can be anything. A match is context, not proof of who owns a device or what it's used for.</p></div>
     <div class="panel"><h2>Use it responsibly</h2><p>Observing public broadcasts is legal in most places, but using what you collect to follow, harass or track a person is not. Respect local laws.</p></div>

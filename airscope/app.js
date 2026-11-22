@@ -1,6 +1,6 @@
 // Airscope UI. Passive: listens to Bluetooth advertisements, never connects.
 import { bluetoothSupport, startScan, pickAndWatch, explainBluetoothError } from "../scanner/ble.js";
-import { CATEGORIES, classifySsid } from "./signatures.js";
+import { CATEGORIES, classifySsid, setCustomSignatures, isRandomizedMac } from "./signatures.js";
 import { Session } from "./session.js";
 
 const $ = (s, el = document) => el.querySelector(s);
@@ -24,10 +24,49 @@ function toast(msg) {
 // ---------------------------------------------------------------- state
 
 let watch = store.get("watch", []);
+let custom = store.get("custom", []);
 let mute = store.get("mute", []);
 let session = new Session({ watch, mute });
 let scan = null;
 let followers = []; // devices picked one at a time (browsers without a full scan)
+
+// Inside the Android app, a native core scans Bluetooth and Wi-Fi and calls
+// window.__airscopeEvents with batches of events.
+const native = typeof window.AirscopeNative === "object" && window.AirscopeNative ? window.AirscopeNative : null;
+let nativeState = { scanning: false };
+const WINDOW = native ? 90000 : 60000; // Wi-Fi scans arrive every ~30 s
+const hexToBytes = (h) => Uint8Array.from((String(h ?? "").match(/[0-9a-f]{2}/gi) ?? []).map((b) => parseInt(b, 16)));
+const mapHex = (o) => Object.fromEntries(Object.entries(o ?? {}).map(([k, v]) => [k, hexToBytes(v)]));
+window.__airscopeEvents = (events) => {
+  for (const e of events) {
+    try { handleNative(e); } catch { /* one bad event never stops the stream */ }
+  }
+};
+function handleNative(e) {
+  if (e.type === "ble") {
+    onAdvert({ id: e.id, mac: e.mac, name: e.name, rssi: e.rssi, txPower: e.txPower, manufacturerData: mapHex(e.manufacturerData), serviceData: mapHex(e.serviceData), uuids: e.uuids ?? [] });
+  } else if (e.type === "wifi") {
+    let last = null;
+    for (const n of e.networks ?? []) {
+      const { alerts } = session.ingestWifi(n, Date.now(), geo);
+      if (alerts.length) last = alerts[alerts.length - 1];
+    }
+    nativeState.wifiAt = Date.now();
+    nativeState.wifiCount = (e.networks ?? []).length;
+    renderSupport();
+    if (last) raise(last);
+  } else if (e.type === "location") {
+    if ($("#geo-tag").checked) geo = { latitude: e.latitude, longitude: e.longitude };
+  } else if (e.type === "state") {
+    const was = nativeState.scanning;
+    nativeState = { ...nativeState, ...e };
+    if (e.message) toast(e.message);
+    if (nativeState.scanning && !was) scan = { stop: () => native.stop() };
+    if (!nativeState.scanning && was) scan = null;
+    renderSupport();
+    tick();
+  }
+}
 let geo = null;
 let geoWatch = null;
 let catFilter = null;
@@ -65,6 +104,18 @@ function diagnostics() {
 let lastLevel = null;
 function renderSupport() {
   const el = $("#support");
+  if (native) {
+    const warn = (nativeState.warnings ?? []).map((w) => `<p style="color:var(--warn)">${esc(w)}</p>`).join("");
+    if (nativeState.scanning) {
+      const wifi = nativeState.wifiAt ? `Wi-Fi: ${nativeState.wifiCount} networks, updated ${Math.max(0, Math.round((Date.now() - nativeState.wifiAt) / 1000))}s ago` : "Wi-Fi: waiting for the first scan";
+      el.innerHTML = `<div class="row"><button class="btn block" type="button" id="stop">Stop scan</button></div><p class="muted mono" style="font-size:11.5px;margin-top:6px">Bluetooth: ${nativeState.bluetooth ? "scanning" : "off"} · ${esc(wifi)}</p>${warn}`;
+      $("#stop").onclick = stop;
+    } else {
+      el.innerHTML = `<button class="btn primary block" type="button" id="start">Start scan</button>${warn}`;
+      $("#start").onclick = start;
+    }
+    return;
+  }
   const level = bluetoothSupport().level;
   lastLevel = level;
   if (scan) {
@@ -123,6 +174,10 @@ async function pick() {
 
 async function start() {
   try { audio ??= new (window.AudioContext || window.webkitAudioContext)(); audio.resume(); } catch { audio = null; }
+  if (native) {
+    native.start(); // permissions are requested natively; state arrives as events
+    return;
+  }
   try {
     scan = await startScan(onAdvert);
   } catch (err) {
@@ -135,6 +190,10 @@ async function start() {
 }
 
 function stop() {
+  if (native) {
+    native.stop();
+    return;
+  }
   scan?.stop();
   scan = null;
   for (const f of followers) f.stop();
@@ -171,7 +230,8 @@ function raise(a) {
       o.stop(t0 + 0.14);
     }
   }
-  navigator.vibrate?.([120, 60, 120]);
+  if (native) native.vibrate(300);
+  else navigator.vibrate?.([120, 60, 120]);
   renderAlertLog();
 }
 $("#alert-open").onclick = () => {
@@ -182,6 +242,7 @@ $("#alert-open").onclick = () => {
 // ---------------------------------------------------------------- location
 
 function startGeo() {
+  if (native) return; // the app sends location events while scanning
   if (!navigator.geolocation || geoWatch != null) return;
   geoWatch = navigator.geolocation.watchPosition(
     (p) => { geo = { latitude: p.coords.latitude, longitude: p.coords.longitude }; },
@@ -240,7 +301,7 @@ function drawRadar() {
     }
   }
   const now = Date.now();
-  for (const d of session.list(now, followers.length ? null : 30000)) {
+  for (const d of session.list(now, followers.length ? null : WINDOW)) {
     if (catFilter && d.category !== catFilter) continue;
     const rssi = d.rssi ?? -100;
     const r = Math.min(1, Math.max(0.06, (-rssi - 35) / 60)) * R;
@@ -264,7 +325,7 @@ function drawRadar() {
 // ---------------------------------------------------------------- list & counters
 
 function renderCounters() {
-  const counts = session.counts(Date.now(), followers.length ? null : 60000);
+  const counts = session.counts(Date.now(), followers.length ? null : WINDOW);
   const keys = Object.keys(CATEGORIES).filter((k) => counts[k]);
   $("#counters").innerHTML = keys.length ? keys.map((k) => `<button class="counter" type="button" data-cat="${k}" aria-pressed="${catFilter === k}"><b>${counts[k]}</b><span><i class="dot" style="background:${CATEGORIES[k].color}"></i>${esc(CATEGORIES[k].label)}</span></button>`).join("") : "";
 }
@@ -278,13 +339,13 @@ $("#counters").addEventListener("click", (e) => {
 function renderList() {
   const now = Date.now();
   const hide = $("#hide-common").checked;
-  const list = session.list(now, followers.length ? null : 60000).filter((d) => (!catFilter || d.category === catFilter) && (!hide || (d.category !== "phone" && d.category !== "audio")));
+  const list = session.list(now, followers.length ? null : WINDOW).filter((d) => (!catFilter || d.category === catFilter) && (!hide || !["phone", "audio", "network"].includes(d.category)));
   $("#list-title").textContent = catFilter ? `${CATEGORIES[catFilter].label} nearby` : "Nearby now";
   $("#devs").innerHTML = list.length ? list.slice(0, 200).map((d) => {
     const ago = Math.round((now - d.lastSeen) / 1000);
     return `<button class="dev ${d.watched.length ? "watched" : ""}" type="button" data-dev="${esc(d.id)}">
       <span class="bar" style="background:${CATEGORIES[d.category]?.color}"></span>
-      <span><span class="t">${esc(d.label)}</span> ${d.watched.length ? '<span class="badge watch">Watched</span>' : ""}<span class="badge">${esc(d.confidence)}</span>
+      <span><span class="t">${esc(d.label)}</span> ${d.watched.length ? '<span class="badge watch">Watched</span>' : ""}${d.radio === "wifi" ? `<span class="badge">Wi-Fi${d.band ? ` ${esc(d.band)}` : ""}</span>` : ""}<span class="badge">${esc(d.confidence)}</span>
         <span class="s" style="display:block">${esc([CATEGORIES[d.category]?.label, d.name && d.name !== d.label ? d.name : null, d.vendor, d.proximity?.band].filter(Boolean).join(" · "))}</span></span>
       <span class="r">${d.rssi == null ? "—" : Math.round(d.rssi)}<span class="muted" style="display:block;font-size:11px">${ago < 3 ? "now" : `${ago}s ago`}</span></span></button>`;
   }).join("") : `<p class="muted">${scan ? "Listening. Devices appear as they broadcast." : "Start a scan to see Bluetooth activity around you."}</p>`;
@@ -314,6 +375,9 @@ function openDevice(id) {
     <div class="row" style="justify-content:space-between;align-items:start"><div style="min-width:0"><div style="font-weight:700;font-size:18px;overflow-wrap:anywhere">${esc(d.label)}</div><div class="muted">${esc(CATEGORIES[d.category]?.label)} · ${esc(d.confidence)} match</div></div><button class="btn small" type="button" id="sheet-close">Done</button></div>
     <p>${esc(d.reason)}</p>
     <dl class="kv">
+      ${dt("Radio", d.radio === "wifi" ? `Wi-Fi${d.band ? ` · ${esc(d.band)}` : ""}${d.frequency ? ` · ${d.frequency} MHz` : ""}` : "Bluetooth")}
+      ${dt("Address", d.mac ? `${esc(d.mac)}${isRandomizedMac(d.mac) ? ' <span class="muted">(randomized: doesn\'t identify the maker)</span>' : ""}` : null)}
+      ${dt("Security", esc(d.security))}
       ${dt("Name", esc(d.name))}${dt("Vendor", esc(d.vendor))}${dt("Signal", d.rssi == null ? null : `${Math.round(d.rssi)} dBm (strongest ${d.rssiMax}) · ${esc(d.proximity?.band)}`)}
       ${dt("First seen", new Date(d.firstSeen).toLocaleTimeString())}${dt("Last seen", new Date(d.lastSeen).toLocaleTimeString())}
       ${dt("Broadcasts", d.count)}${dt("Places", d.places.size ? d.places.size : null)}
@@ -353,7 +417,7 @@ $("#watch-kind").addEventListener("change", (e) => {
   const cat = e.target.value === "category";
   $("#watch-category").hidden = !cat;
   $("#watch-value").hidden = cat;
-  $("#watch-value").placeholder = { keyword: "e.g. geotab, Tesla, /^1581F5/", company: "e.g. 004C", service: "e.g. FFFA", device: "Device ID from a detail sheet" }[e.target.value] ?? "";
+  $("#watch-value").placeholder = { keyword: "e.g. geotab, Tesla, /^1581F5/", company: "e.g. 004C", service: "e.g. FFFA", device: "Device ID from a detail sheet", mac: "Address or prefix, e.g. 00:30:44" }[e.target.value] ?? "";
 });
 $("#watch-form").addEventListener("submit", (e) => {
   e.preventDefault();
@@ -374,8 +438,34 @@ $("#mute-form").addEventListener("submit", (e) => {
   saveRules();
 });
 
+function renderCustom() {
+  const el = $("#custom-rules");
+  if (!el) return;
+  el.innerHTML = custom.length ? custom.map((r) => `<div class="rule"><div><span class="badge">${r.kind === "mac" ? "Address" : "Name"}</span> <span class="v">${esc(r.value)}</span> → <span style="color:${CATEGORIES[r.category]?.color}">${esc(r.label || CATEGORIES[r.category]?.label)}</span></div><button class="btn small" type="button" data-del-custom="${r.id}">Remove</button></div>`).join("") : '<p class="muted">None yet.</p>';
+}
+function saveCustom() {
+  store.set("custom", custom);
+  setCustomSignatures(custom);
+  renderCustom();
+}
+$("#custom-category").innerHTML = Object.entries(CATEGORIES).filter(([k]) => k !== "unknown").map(([k, v]) => `<option value="${k}">${esc(v.label)}</option>`).join("");
+$("#custom-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const value = $("#custom-value").value.trim();
+  if (!value) return toast("Enter an address prefix or a name.");
+  custom.push({ id: uid(), kind: $("#custom-kind").value, value, category: $("#custom-category").value, label: $("#custom-label").value.trim() });
+  $("#custom-value").value = "";
+  $("#custom-label").value = "";
+  saveCustom();
+  toast("Signature added. It applies to devices seen from now on.");
+});
+document.addEventListener("click", (e) => {
+  const c = e.target.closest("[data-del-custom]");
+  if (c) { custom = custom.filter((r) => r.id !== c.dataset.delCustom); saveCustom(); }
+});
+
 function renderRules() {
-  const kindLabel = { keyword: "Keyword", category: "Category", company: "Company", service: "Service", device: "Device" };
+  const kindLabel = { keyword: "Keyword", category: "Category", company: "Company", service: "Service", device: "Device", mac: "Address" };
   $("#watch-rules").innerHTML = watch.length ? watch.map((r) => `<div class="rule"><div><span class="badge">${kindLabel[r.kind]}</span> <span class="v">${esc(r.label ?? r.value)}</span>${r.sound === false ? ' <span class="muted" style="font-size:12px">silent</span>' : ""}</div><button class="btn small" type="button" data-del-watch="${r.id}">Remove</button></div>`).join("") : '<p class="muted">No rules yet.</p>';
   $("#mute-rules").innerHTML = mute.length ? mute.map((r) => `<div class="rule"><div><span class="badge">${kindLabel[r.kind]}</span> <span class="v">${esc(r.label ?? r.value)}</span></div><button class="btn small" type="button" data-del-mute="${r.id}">Unmute</button></div>`).join("") : '<p class="muted">Nothing muted.</p>';
 }
@@ -404,6 +494,10 @@ function renderLog() {
 }
 
 async function deliver(filename, text, type) {
+  if (native) {
+    native.saveFile(filename, type, text);
+    return;
+  }
   const file = new File([text], filename, { type });
   try {
     if (navigator.canShare?.({ files: [file] })) {
@@ -449,6 +543,11 @@ $("#debrief-make").onclick = () => {
   $("#debrief-copy").hidden = false;
 };
 $("#debrief-copy").onclick = async () => {
+  if (native) {
+    native.copy($("#debrief").textContent);
+    toast("Copied. Paste it into your AI assistant.");
+    return;
+  }
   try { await navigator.clipboard.writeText($("#debrief").textContent); toast("Copied. Paste it into your AI assistant."); } catch {
     const r = document.createRange();
     r.selectNodeContents($("#debrief"));
@@ -473,7 +572,7 @@ function tick() {
   const st = $("#status");
   if (scan || followers.length) {
     const s = Math.floor((Date.now() - session.startedAt) / 1000);
-    st.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")} · ${followers.length ? `${followers.length} followed` : session.list(Date.now(), 60000).length}`;
+    st.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")} · ${followers.length ? `${followers.length} followed` : session.list(Date.now(), WINDOW).length}`;
     st.className = "status live";
   } else {
     st.textContent = "Idle";
@@ -493,11 +592,13 @@ function frame() {
 }
 
 renderSupport();
-watchForBluetooth();
+if (!native) watchForBluetooth();
+setCustomSignatures(custom);
+renderCustom();
 renderRules();
 renderAlertLog();
 renderSsids();
 tick();
 showView(store.get("view", "live"));
 requestAnimationFrame(frame);
-if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});
+if (!native && "serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});

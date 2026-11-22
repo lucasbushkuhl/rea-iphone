@@ -69,6 +69,7 @@ export function normalizeAdvert(a) {
     manufacturer,
     service,
     uuids,
+    mac: a.mac ?? null,
   };
 }
 

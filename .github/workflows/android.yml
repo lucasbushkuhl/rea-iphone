@@ -1,0 +1,69 @@
+# Build the Airscope Android app and publish the APK as a GitHub release, so
+# it can be downloaded straight to a phone from:
+#   https://github.com/<owner>/<repo>/releases/latest/download/Airscope.apk
+name: Android app
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "android/**"
+      - "airscope/**"
+      - "scanner/**"
+      - "scripts/build-web.mjs"
+      - ".github/workflows/android.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Test the shared web app
+        run: npm test
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.10.2"
+      - name: Bundle the interface into the app
+        run: |
+          node scripts/build-web.mjs
+          rm -rf android/app/src/main/assets
+          mkdir -p android/app/src/main/assets
+          cp -r site/airscope site/scanner android/app/src/main/assets/
+          rm -f android/app/src/main/assets/*/sw.js
+      - name: Build APK
+        working-directory: android
+        env:
+          VERSION_CODE: ${{ github.run_number }}
+        run: gradle assembleRelease --no-daemon --stacktrace
+      - name: Collect APK
+        run: cp android/app/build/outputs/apk/release/app-release.apk Airscope.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Airscope-apk
+          path: Airscope.apk
+      - name: Publish release
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: airscope-android-${{ github.run_number }}
+          name: Airscope for Android (build ${{ github.run_number }})
+          make_latest: "true"
+          files: Airscope.apk
+          body: |
+            Install on Android: open this page on the phone, tap **Airscope.apk**, then open the download. If Android asks, allow installing apps from your browser.
+            Permanent link to the newest build: https://github.com/${{ github.repository }}/releases/latest/download/Airscope.apk
