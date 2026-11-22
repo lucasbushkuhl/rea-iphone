@@ -21,6 +21,52 @@ it was derived and what its limits are.
 
 Zero dependencies. Node 20+. MIT.
 
+## Airscope: passive wireless awareness (web app)
+
+`airscope/` is **Airscope**, an original passive signal-awareness app for
+your phone, in the spirit of Android-only tools like SØPHIA. It listens to
+Bluetooth Low Energy advertisements around you and never connects to,
+pairs with, or transmits to anything.
+
+- **Live tactical view:** a radar (distance from center is signal strength;
+  angle is not direction), category counters, and a live device list.
+- **Classifications:**
+  - drones, from their **Remote ID** broadcast (serial, aircraft type,
+    status, position, altitude, speed, operator ID and position);
+  - vehicles (Tesla's Bluetooth name format, plus names);
+  - fleet telematics, cameras and public-safety gear (names);
+  - trackers (AirTag / Find My away from owner, Tile, SmartTag, Google Find
+    My Device, Chipolo);
+  - beacons (iBeacon, Eddystone with URL decoding, AltBeacon);
+  - wearables, audio, phones and computers (Bluetooth company IDs).
+
+  Every match is labeled *certain*, *likely* or *possible*.
+- **Watchlist:** keywords, `/patterns/`, categories, company IDs, service
+  UUIDs or device IDs. You get a banner, a tone and a vibration when a match
+  appears or returns after five minutes away.
+- **Mute list** for noise.
+- **Log:**
+  - optional location tagging (counts the places a device was seen);
+  - CSV and JSON export through the share sheet, with spreadsheet-formula
+    injection neutralized, since device names are untrusted;
+  - an **AI Debrief**, a summary you paste into any AI assistant, with no API
+    key involved;
+  - a Wi-Fi network-name classifier.
+
+**Where it scans:** on iPhone, open it in the free **Bluefy** browser (Safari
+has no Bluetooth). On Android, Mac or PC, use Chrome with *Experimental Web
+Platform features* on. **Wi-Fi scanning isn't possible on any iPhone:**
+Apple blocks it for all apps and sites, which is why tools like SØPHIA are
+Android-only.
+
+Tested on byte-exact Remote ID, Eddystone and tracker advertisements. An
+end-to-end Chromium run simulates a drone, a Tesla, a Geotab unit, an AirTag,
+a beacon and a phone, and checks the classifications, radar, watchlist
+alert, drone sheet, CSV download and debrief.
+
+After GitHub Pages is enabled (below), Airscope is at
+`https://<user>.github.io/rea-iphone/airscope/`.
+
 ## Signal Sweep: find trackers and hidden cameras (web app)
 
 `scanner/` is **Signal Sweep**, a counter-surveillance web app for your
@@ -293,7 +339,7 @@ lists. Both relative and pointer-based lists are supported.
 
 ## How it's verified
 
-The test suite (`npm test`: 73 tests, a few seconds, no tools or devices needed)
+The test suite (`npm test`: 80 tests, a few seconds, no tools or devices needed)
 runs against **real linked arm64 Mach-O binaries**, not mocks:
 
 - `test/fixtures/src/` holds an Objective-C source file and two hand-laid

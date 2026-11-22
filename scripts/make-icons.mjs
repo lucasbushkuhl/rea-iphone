@@ -120,3 +120,41 @@ function renderSweep(size, k) {
 }
 for (const [name, size, k] of SIZES) writeFileSync(join(SWEEP_OUT, name), renderSweep(size, k * 1.15));
 console.log(`icons written to ${SWEEP_OUT}`);
+
+// ---- Airscope: a scope reticle with blips.
+const AIR_OUT = join(dirname(fileURLToPath(import.meta.url)), "..", "airscope", "icons");
+mkdirSync(AIR_OUT, { recursive: true });
+const A_BG = [0x07, 0x0b, 0x10];
+const A_GRID = [0x1d, 0x4a, 0x63];
+const A_CYAN = [0x39, 0xc7, 0xe8];
+const A_AMBER = [0xf3, 0xb5, 0x4a];
+const A_RED = [0xff, 0x6b, 0x5a];
+function airShade(u, v, k) {
+  const x = (u - 0.5) / k;
+  const y = (v - 0.5) / k;
+  const d = Math.hypot(x, y);
+  for (const [bx, by, c] of [[0.16, -0.12, A_RED], [-0.2, 0.09, A_AMBER], [0.07, 0.24, A_CYAN]]) if (Math.hypot(x - bx, y - by) < 0.04) return c;
+  if (Math.abs(d - 0.38) < 0.018) return A_CYAN;
+  if (Math.abs(d - 0.25) < 0.01 || Math.abs(d - 0.12) < 0.01) return A_GRID;
+  if (d < 0.38 && (Math.abs(x) < 0.007 || Math.abs(y) < 0.007)) return A_GRID;
+  for (const s of [-1, 1]) {
+    if (Math.abs(y) < 0.012 && x * s > 0.38 && x * s < 0.46) return A_CYAN;
+    if (Math.abs(x) < 0.012 && y * s > 0.38 && y * s < 0.46) return A_CYAN;
+  }
+  return null;
+}
+function renderAir(size, k) {
+  const rgb = Buffer.alloc(size * size * 3);
+  for (let py = 0; py < size; py++) for (let px = 0; px < size; px++) {
+    let r = 0, g = 0, b = 0;
+    for (let sy = 0; sy < 4; sy++) for (let sx = 0; sx < 4; sx++) {
+      const c = airShade((px + (sx + 0.5) / 4) / size, (py + (sy + 0.5) / 4) / size, k) ?? A_BG;
+      r += c[0]; g += c[1]; b += c[2];
+    }
+    const o = (py * size + px) * 3;
+    rgb[o] = Math.round(r / 16); rgb[o + 1] = Math.round(g / 16); rgb[o + 2] = Math.round(b / 16);
+  }
+  return png(size, size, rgb);
+}
+for (const [name, size, k] of SIZES) writeFileSync(join(AIR_OUT, name), renderAir(size, k * 1.1));
+console.log(`icons written to ${AIR_OUT}`);

@@ -113,32 +113,39 @@ writeFileSync(join(OUT, "sw.js"), sw);
 if (!existsSync(join(OUT, "core", "analyzeSource.js"))) throw new Error("core was not copied");
 console.log(`Built ${relative(ROOT, OUT) || "."}: ${files.length + 1} files, ${copied.size} core modules, version ${version}`);
 
-// 5. Signal Sweep (scanner/) at site/scanner/, with its own offline cache.
-const SCAN = join(ROOT, "scanner");
-const SOUT = join(OUT, "scanner");
-mkdirSync(join(SOUT, "icons"), { recursive: true });
-const scanFiles = [];
-for (const f of readdirSync(SCAN)) {
-  if (f === "sw.js" || f === "icons") continue;
-  const code = readFileSync(join(SCAN, f));
-  if (f.endsWith(".js")) {
-    for (const spec of specifiers(code.toString("utf8"))) {
-      if (!spec.startsWith("./")) throw new Error(`scanner/${f} imports ${spec}; scanner modules may only import each other`);
+// 5. Standalone phone apps, each in its own folder with its own offline
+// cache. Modules may import their own files and, for Airscope, Signal
+// Sweep's shared Bluetooth modules.
+function buildApp(dir, { shared = [] } = {}) {
+  const SRCDIR = join(ROOT, dir);
+  const DEST = join(OUT, dir);
+  mkdirSync(join(DEST, "icons"), { recursive: true });
+  const files = [];
+  for (const f of readdirSync(SRCDIR)) {
+    if (f === "sw.js" || f === "icons") continue;
+    const code = readFileSync(join(SRCDIR, f));
+    if (f.endsWith(".js")) {
+      for (const spec of specifiers(code.toString("utf8"))) {
+        const ok = spec.startsWith("./") || shared.some((p) => spec === `../${p}`);
+        if (!ok) throw new Error(`${dir}/${f} imports ${spec}; not allowed in a browser app`);
+      }
     }
+    writeFileSync(join(DEST, f), code);
+    files.push(f);
   }
-  writeFileSync(join(SOUT, f), code);
-  scanFiles.push(f);
+  for (const f of readdirSync(join(SRCDIR, "icons"))) {
+    copyFileSync(join(SRCDIR, "icons", f), join(DEST, "icons", f));
+    files.push(`icons/${f}`);
+  }
+  const precache = ["./", ...files, ...shared.map((p) => `../${p}`)];
+  const h = createHash("sha256");
+  for (const f of files.sort()) h.update(f).update(readFileSync(join(DEST, f)));
+  for (const p of shared) h.update(p).update(readFileSync(join(ROOT, p)));
+  const v = h.digest("hex").slice(0, 12);
+  const sw = readFileSync(join(SRCDIR, "sw.js"), "utf8").replaceAll("__VERSION__", v).replaceAll("__PRECACHE__", JSON.stringify(precache, null, 2));
+  if (/__VERSION__|__PRECACHE__/.test(sw)) throw new Error(`${dir}/sw.js placeholders were not filled`);
+  writeFileSync(join(DEST, "sw.js"), sw);
+  console.log(`Built ${relative(ROOT, DEST)}: ${files.length + 1} files, version ${v}`);
 }
-for (const f of readdirSync(join(SCAN, "icons"))) {
-  copyFileSync(join(SCAN, "icons", f), join(SOUT, "icons", f));
-  scanFiles.push(`icons/${f}`);
-}
-const shash = createHash("sha256");
-for (const f of scanFiles.sort()) shash.update(f).update(readFileSync(join(SOUT, f)));
-const sversion = shash.digest("hex").slice(0, 12);
-const ssw = readFileSync(join(SCAN, "sw.js"), "utf8")
-  .replaceAll("__VERSION__", sversion)
-  .replaceAll("__PRECACHE__", JSON.stringify(["./", ...scanFiles], null, 2));
-if (/__VERSION__|__PRECACHE__/.test(ssw)) throw new Error("scanner sw.js placeholders were not filled");
-writeFileSync(join(SOUT, "sw.js"), ssw);
-console.log(`Built ${relative(ROOT, SOUT)}: ${scanFiles.length + 1} files, version ${sversion}`);
+buildApp("scanner");
+buildApp("airscope", { shared: ["scanner/ble.js", "scanner/trackers.js"] });
