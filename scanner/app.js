@@ -405,6 +405,20 @@ renderChecklist();
 // ---------------------------------------------------------------- start
 
 renderSupport();
+// Some browsers (Bluefy) add Bluetooth to the page shortly after it loads.
+{
+  let level = bluetoothSupport().level;
+  const recheck = (ms) => {
+    const until = Date.now() + ms;
+    const timer = setInterval(() => {
+      const now = bluetoothSupport().level;
+      if (now !== level && !session) { level = now; renderSupport(); }
+      if (level !== "none" || Date.now() > until) clearInterval(timer);
+    }, 300);
+  };
+  recheck(15000);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden && !session) recheck(5000); });
+}
 renderDevices();
 showView(store.get("view", "bluetooth"));
 if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});

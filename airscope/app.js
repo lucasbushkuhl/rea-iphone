@@ -1,5 +1,5 @@
 // Airscope UI. Passive: listens to Bluetooth advertisements, never connects.
-import { bluetoothSupport, startScan, explainBluetoothError } from "../scanner/ble.js";
+import { bluetoothSupport, startScan, pickAndWatch, explainBluetoothError } from "../scanner/ble.js";
 import { CATEGORIES, classifySsid } from "./signatures.js";
 import { Session } from "./session.js";
 
@@ -55,23 +55,59 @@ document.querySelector("nav.tabs").addEventListener("click", (e) => {
 
 // ---------------------------------------------------------------- scanning
 
+function diagnostics() {
+  const bt = navigator.bluetooth;
+  const has = (f) => (bt && typeof bt[f] === "function" ? "yes" : "no");
+  return `Bluetooth API: ${bt ? "yes" : "no"} · scan: ${has("requestLEScan")} · pick: ${has("requestDevice")}`;
+}
+
+let lastLevel = null;
 function renderSupport() {
   const el = $("#support");
   const level = bluetoothSupport().level;
+  lastLevel = level;
   if (scan) {
     el.innerHTML = `<button class="btn block" type="button" id="stop">Stop scan</button>`;
     $("#stop").onclick = stop;
   } else if (level === "scan") {
     el.innerHTML = `<button class="btn primary block" type="button" id="start">Start scan</button>`;
     $("#start").onclick = start;
+  } else if (level === "pick") {
+    el.innerHTML = `<div class="note"><strong>This browser can follow one device at a time</strong><p>It shows its own list of nearby devices; pick one and Airscope tracks it live. A full scan isn't offered by this browser version.</p><button class="btn primary block" type="button" id="pick">Choose a device</button><p class="muted mono" style="font-size:11px">${esc(diagnostics())}</p></div>`;
+    $("#pick").onclick = pick;
   } else if (isIOS) {
-    el.innerHTML = `<div class="note warn"><strong>Open Airscope in Bluefy to scan</strong><p>Safari on iPhone has no Bluetooth access. Install <strong>Bluefy – Web BLE Browser</strong> (free) from the App Store and open this page in it. Watchlist, log and exports work here too.</p><button class="btn block" type="button" id="copy-link">Copy link for Bluefy</button></div>`;
+    el.innerHTML = `<div class="note warn"><strong>Waiting for Bluetooth</strong><p>If this page is open in <strong>Bluefy</strong>, wait a second or pull down to reload. Safari on iPhone has no Bluetooth access, so for scanning, open this page in Bluefy (free on the App Store). Watchlist, log and exports work anywhere.</p><div class="row"><button class="btn" type="button" id="recheck">Check again</button><button class="btn" type="button" id="copy-link">Copy link</button></div><p class="muted mono" style="font-size:11px">${esc(diagnostics())}</p></div>`;
+    $("#recheck").onclick = () => { renderSupport(); if (lastLevel === "none") toast("Still no Bluetooth in this browser."); };
     $("#copy-link").onclick = async () => {
-      try { await navigator.clipboard.writeText(location.href); toast("Link copied. Paste it into Bluefy."); } catch { toast(location.href); }
+      try { await navigator.clipboard.writeText(location.href); toast("Link copied."); } catch { toast(location.href); }
     };
   } else {
-    el.innerHTML = `<div class="note warn"><strong>This browser can't scan Bluetooth</strong><p>Use Chrome or Edge on Android or a computer with <span class="mono">chrome://flags</span> › Experimental Web Platform features turned on, over https.</p></div>`;
+    el.innerHTML = `<div class="note warn"><strong>This browser can't scan Bluetooth</strong><p>Use Chrome or Edge on Android or a computer with <span class="mono">chrome://flags</span> › Experimental Web Platform features turned on, over https.</p><p class="muted mono" style="font-size:11px">${esc(diagnostics())}</p></div>`;
   }
+}
+
+// Some browsers (Bluefy) add Bluetooth to the page shortly after it loads:
+// keep checking for a while, and again when the app comes back to front.
+function watchForBluetooth(ms = 15000) {
+  const until = Date.now() + ms;
+  const timer = setInterval(() => {
+    if (bluetoothSupport().level !== lastLevel && !scan) renderSupport();
+    if (lastLevel !== "none" || Date.now() > until) clearInterval(timer);
+  }, 300);
+}
+document.addEventListener("visibilitychange", () => { if (!document.hidden && !scan) { renderSupport(); watchForBluetooth(5000); } });
+
+async function pick() {
+  try { audio ??= new (window.AudioContext || window.webkitAudioContext)(); audio.resume(); } catch { audio = null; }
+  try {
+    scan = await pickAndWatch(onAdvert);
+  } catch (err) {
+    toast(explainBluetoothError(err));
+    return;
+  }
+  if ($("#geo-tag").checked) startGeo();
+  renderSupport();
+  tick();
 }
 
 async function start() {
@@ -444,6 +480,7 @@ function frame() {
 }
 
 renderSupport();
+watchForBluetooth();
 renderRules();
 renderAlertLog();
 renderSsids();

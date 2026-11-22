@@ -275,6 +275,27 @@ test("Airscope in headless Chromium", { skip: !pw && "Playwright not installed",
     assert.deepEqual(errors, []);
     await ctx.close();
 
+    // Bluefy-style: Bluetooth appears a moment after the page has loaded.
+    const late = await browser.newContext({ ...pw.devices["iPhone 13"], deviceScaleFactor: 1 });
+    await late.addInitScript(`setTimeout(() => Object.defineProperty(navigator, "bluetooth", { configurable: true, value: { addEventListener() {}, removeEventListener() {}, requestLEScan: async () => ({ stop() {} }) } }), 1000);`);
+    const pl = await late.newPage();
+    await pl.goto("http://127.0.0.1:8399/airscope/");
+    assert.match(await pl.$eval("#support", (e) => e.textContent), /Waiting for Bluetooth/);
+    await pl.waitForSelector("#start", { timeout: 5000 });
+    await pl.goto("http://127.0.0.1:8399/scanner/");
+    await pl.waitForSelector("#bt-start", { timeout: 5000 });
+    await late.close();
+
+    // Pick-only browsers get the single-device follow mode.
+    const pickCtx = await browser.newContext({ viewport: { width: 390, height: 844 } });
+    await pickCtx.addInitScript(`Object.defineProperty(navigator, "bluetooth", { configurable: true, value: { requestDevice: async () => ({ id: "p1", name: "Geotab GO9", addEventListener() {}, removeEventListener() {} }) } });`);
+    const pp = await pickCtx.newPage();
+    await pp.goto("http://127.0.0.1:8399/airscope/");
+    await pp.click("#pick");
+    await pp.waitForFunction(() => document.querySelectorAll(".dev").length === 1);
+    assert.equal(await pp.$eval(".dev .t", (e) => e.textContent), "Fleet telematics (by name)");
+    await pickCtx.close();
+
     const ios = await browser.newContext({ ...pw.devices["iPhone 13"], deviceScaleFactor: 1 });
     const p2 = await ios.newPage();
     await p2.goto("http://127.0.0.1:8399/airscope/");
