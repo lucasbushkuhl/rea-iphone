@@ -110,19 +110,35 @@ test("Wi-Fi networks: vehicle routers, Flock, phones, Remote ID beacons, securit
   assert.equal(classifyWifi({ bssid: "60:60:1f:00:00:01", ssid: "x" }).label, "DJI drone or controller");
 });
 
+test("Flock Safety signatures (firmware-derived, via Flock-You)", () => {
+  const ble = (x) => classifyAdvert(x);
+  assert.deepEqual([ble({ name: "Penguin-1234567890" }).label, ble({ name: "Penguin-1234567890" }).confidence], ["Flock camera battery pack", "likely"]);
+  assert.equal(ble({ name: "FS Ext Battery" }).label, "Flock camera battery pack");
+  assert.equal(ble({ name: "Penguin-12" }).category, "unknown", "wrong digit count is not a match");
+  assert.deepEqual([ble({ manufacturerData: { 0x09c8: [1, 2] } }).label, ble({ manufacturerData: { 0x09c8: [1] } }).confidence], ["Possible Flock camera battery pack", "possible"]);
+  assert.equal(ble({ uuids: ["e8ccbb38-9532-46a8-9fe5-1814df172e6f"] }).label, "Flock camera accessory");
+  assert.equal(ble({ uuids: [full("3101")] }).label, "Possible Flock Raven sensor");
+  assert.equal(ble({ uuids: [full("3601")] }).category, "unknown");
+  assert.equal(ble({ mac: "B4:1E:52:00:00:01" }).label, "Flock Safety device");
+  const ap = classifyWifi({ bssid: "11:22:33:44:55:66", ssid: "Flock-A1B2C3" });
+  assert.deepEqual([ap.label, ap.confidence], ["Flock camera setup network", "likely"]);
+  assert.equal(classifyWifi({ bssid: "11:22:33:44:55:66", ssid: "Flock Fans Club" }).confidence, "possible");
+  assert.equal(classifyWifi({ bssid: "B4:1E:52:00:00:09", ssid: "x" }).label, "Flock Safety device");
+});
+
 test("Bluetooth address prefixes and custom signatures", () => {
   assert.equal(classifyAdvert({ mac: "00:25:DF:11:22:33", rssi: -60 }).category, "publicsafety");
   assert.equal(classifyAdvert({ mac: "02:25:DF:11:22:33", rssi: -60 }).category, "unknown", "randomized address ignored");
-  setCustomSignatures([{ kind: "mac", value: "B4:1E:52", category: "alpr", label: "Flock camera (my signature)" }, { kind: "name", value: "/^penguin/", category: "alpr", label: "Named camera" }, { kind: "mac", value: "x", category: "nope" }]);
+  setCustomSignatures([{ kind: "mac", value: "B4:1E:53", category: "alpr", label: "Flock camera (my signature)" }, { kind: "name", value: "/^penguin/", category: "alpr", label: "Named camera" }, { kind: "mac", value: "x", category: "nope" }]);
   try {
-    const c = classifyAdvert({ mac: "b4:1e:52:00:00:01" });
+    const c = classifyAdvert({ mac: "b4:1e:53:00:00:01" });
     assert.deepEqual([c.category, c.label, c.confidence], ["alpr", "Flock camera (my signature)", "custom"]);
-    assert.equal(classifyWifi({ bssid: "b4-1e-52-00-00-02", ssid: "anything" }).label, "Flock camera (my signature)");
+    assert.equal(classifyWifi({ bssid: "b4-1e-53-00-00-02", ssid: "anything" }).label, "Flock camera (my signature)");
     assert.equal(classifyAdvert({ name: "Penguin-42" }).label, "Named camera");
   } finally {
     setCustomSignatures([]);
   }
-  assert.equal(classifyAdvert({ mac: "b4:1e:52:00:00:01" }).category, "unknown");
+  assert.equal(classifyAdvert({ mac: "b4:1e:53:00:00:01" }).category, "unknown");
 });
 
 test("session with Wi-Fi: alerts, address watch rules, exports", () => {
@@ -392,7 +408,7 @@ test("Airscope in headless Chromium", { skip: !pw && "Playwright not installed",
             { type: "ble", id: "C4:00:00:00:00:09", mac: "C4:00:00:00:00:09", name: "S1a2b3c4d5e6f7a8bC", rssi: -60, manufacturerData: {}, serviceData: {}, uuids: [] },
             { type: "wifi", networks: [
               { bssid: "00:30:44:1A:2B:3C", ssid: "Squad7", rssi: -63, frequency: 5180, capabilities: "[WPA2-PSK-CCMP][ESS]", vendorIes: [] },
-              { bssid: "B4:1E:52:00:00:02", ssid: "cam-unit", rssi: -71, frequency: 2437, capabilities: "[WPA2]", vendorIes: [] },
+              { bssid: "B4:1E:53:00:00:02", ssid: "cam-unit", rssi: -71, frequency: 2437, capabilities: "[WPA2]", vendorIes: [] },
               { bssid: "11:22:33:44:55:66", ssid: "Flock-7781", rssi: -74, frequency: 2412, capabilities: "[WPA2]", vendorIes: [] },
               { bssid: "60:60:1F:00:00:01", ssid: "DJI-xyz", rssi: -80, frequency: 5745, capabilities: "[WPA2]", vendorIes: ["${droneIe}"] },
               { bssid: "AA:BB:CC:00:00:01", ssid: "Home", rssi: -50, frequency: 2462, capabilities: "[WPA3-SAE]", vendorIes: [] }
@@ -412,7 +428,7 @@ test("Airscope in headless Chromium", { skip: !pw && "Playwright not installed",
     await ap.goto("http://127.0.0.1:8399/airscope/");
     // A custom signature and an address-prefix watch rule, set up first.
     await ap.click('nav.tabs [data-view="watch"]');
-    await ap.fill("#custom-value", "B4:1E:52");
+    await ap.fill("#custom-value", "B4:1E:53");
     await ap.selectOption("#custom-category", "alpr");
     await ap.fill("#custom-label", "Flock camera (my signature)");
     await ap.click('#custom-form button[type="submit"]');

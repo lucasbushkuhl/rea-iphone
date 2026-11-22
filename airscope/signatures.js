@@ -43,6 +43,7 @@ export const OUI = {
   "00:A0:D5": ["fleet", "Sierra Wireless AirLink router", "Sierra Wireless"],
   "60:60:1F": ["drone", "DJI drone or controller", "DJI"],
   "4C:FC:AA": ["vehicle", "Tesla vehicle", "Tesla"],
+  "B4:1E:52": ["alpr", "Flock Safety device", "Flock Safety"],
 };
 const VEHICLE_ROUTER_NOTE = " Rugged routers like this are standard in police, fire, EMS, transit and utility fleet vehicles.";
 
@@ -228,6 +229,21 @@ const NAME_RULES = [
 
 const TRACKER_TO_CATEGORY = { tracker: "tracker", camera: "camera", audio: "audio", phone: "phone", beacon: "infrastructure", media: "other", other: "other", unknown: "unknown" };
 
+const FLOCK_ACCESSORY_SERVICE = "e8ccbb38-9532-46a8-9fe5-1814df172e6f";
+const FLOCK_SOURCE = " Signature from the Flock-You project's analysis of Flock camera firmware.";
+
+function flockBle(a) {
+  const all = [...a.uuids, ...a.service.keys()];
+  const hit = (label, confidence, why) => ({ category: "alpr", label, vendor: "Flock Safety", confidence, reason: why + FLOCK_SOURCE, concern: "medium", details: {} });
+  if (all.includes(FLOCK_ACCESSORY_SERVICE)) return hit("Flock camera accessory", "likely", "Advertises Flock's accessory Bluetooth service.");
+  if (a.name && /^Penguin-\d{10}$/.test(a.name)) return hit("Flock camera battery pack", "likely", `Named "${a.name}", the format of Flock's "Penguin" battery packs.`);
+  if (a.name && /^FS Ext Battery$/i.test(a.name)) return hit("Flock camera battery pack", "likely", 'Named "FS Ext Battery", Flock\'s external battery.');
+  if (a.manufacturer.has(0x09c8)) return hit("Possible Flock camera battery pack", "possible", "Bluetooth maker ID 0x09C8 (XUNTONG), used by Flock's battery packs. Other XUNTONG products share it.");
+  const raven = all.find((u) => /^3[1-5]0[0-9a-f]$/.test(u) && parseInt(u, 16) >= 0x3100 && parseInt(u, 16) <= 0x3500);
+  if (raven) return hit("Possible Flock Raven sensor", "possible", `Advertises service 0x${raven.toUpperCase()}, in the range Flock's Raven gunshot sensors use.`);
+  return null;
+}
+
 /**
  * Classify an advertisement. Returns
  * { category, label, vendor, confidence, reason, concern, details }.
@@ -263,6 +279,11 @@ export function classifyAdvert(raw) {
     if (d[0] === 0xbe && d[1] === 0xac) return { category: "infrastructure", label: "AltBeacon", vendor: COMPANY[company]?.[0] ?? null, confidence: "certain", reason: "AltBeacon advertisement.", concern: "none", details: {} };
   }
   if (a.service.has("fd6f")) return { category: "phone", label: "Exposure Notification (phone)", vendor: null, confidence: "certain", reason: "Exposure Notification service (0xFD6F).", concern: "none", details: {} };
+
+  // Flock Safety Bluetooth signatures, extracted from camera firmware by the
+  // open-source Flock-You project (github.com/colonelpanichacks/flock-you).
+  const flock = flockBle(a);
+  if (flock) return flock;
 
   // Trackers and Apple device types (shared with Signal Sweep).
   const t = classifyTracker(a);
@@ -302,6 +323,7 @@ const SSID_RULES = [
   { re: /^(dji|mavic|phantom|tello|anafi|skydio|autel)[-_ ]/i, category: "drone", label: "Drone Wi-Fi" },
   { re: /^(ibr\d{3,4}|r1900|r920|e300|e3000|cba850|aer\d{4}|cradlepoint)/i, category: "fleet", label: "Cradlepoint vehicle router", note: VEHICLE_ROUTER_NOTE },
   { re: /\b(mp70|rv50x?|rv55|lx40|lx60|xr80|xr90|airlink|sierra[-_ ]?wireless)\b/i, category: "fleet", label: "Sierra Wireless AirLink vehicle router", note: VEHICLE_ROUTER_NOTE },
+  { re: /^flock-[0-9a-f]{6}$/i, category: "alpr", label: "Flock camera setup network", confidence: "likely", note: " Flock cameras create a network named Flock-XXXXXX for setup." },
   { re: /flock/i, category: "alpr", label: "Possible Flock Safety camera" },
   { re: /^(mg90|digi[-_ ]?\w+|inseego|mifi)/i, category: "fleet", label: "Vehicle or mobile router" },
   { re: /(geotab|samsara|fleet|eld|truck)/i, category: "fleet", label: "Fleet telematics" },
@@ -315,7 +337,7 @@ const SSID_RULES = [
 export function classifySsid(ssid) {
   const s = String(ssid ?? "").trim();
   if (!s) return null;
-  for (const r of SSID_RULES) if (r.re.test(s)) return { ssid: s, category: r.category, label: r.label, confidence: "possible", note: r.note ?? "" };
+  for (const r of SSID_RULES) if (r.re.test(s)) return { ssid: s, category: r.category, label: r.label, confidence: r.confidence ?? "possible", note: r.note ?? "" };
   return { ssid: s, category: "unknown", label: "No match", confidence: "unknown" };
 }
 
@@ -359,7 +381,7 @@ export function classifyWifi(n) {
   if (byAddress) return { ...byAddress, details };
   const s = classifySsid(ssid);
   if (s && s.category !== "unknown") {
-    return { category: s.category, label: s.label, vendor: null, confidence: "possible", reason: `Network name "${ssid}" matches ${CATEGORIES[s.category].label.toLowerCase()} patterns.${s.note ?? ""}`, concern: s.category === "publicsafety" || s.category === "alpr" || s.category === "drone" ? "medium" : "none", details };
+    return { category: s.category, label: s.label, vendor: null, confidence: s.confidence, reason: `Network name "${ssid}" matches ${CATEGORIES[s.category].label.toLowerCase()} patterns.${s.note ?? ""}`, concern: s.category === "publicsafety" || s.category === "alpr" || s.category === "drone" ? "medium" : "none", details };
   }
   return { category: "network", label: ssid || "Hidden network", vendor: null, confidence: "certain", reason: `${details.security} Wi-Fi network on ${details.band ?? "an unknown band"}.`, concern: "none", details };
 }
